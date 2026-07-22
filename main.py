@@ -144,9 +144,8 @@ class SignalBot:
         if signal is None:
             return
 
-        # Preview signals: popup only, no tracking, no push
+        # Preview signals: log only, no popup, no tracking, no push
         if signal.get('is_preview'):
-            _show_windows_popup(signal)
             reasons_str = ' | '.join(signal['reasons'][:6])
             logger.info(
                 "%s PREVIEW: %s score=%.1f regime=%s price=%.2f | %s",
