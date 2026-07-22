@@ -270,6 +270,15 @@ class StrategyEngine:
             if agree < 1:
                 return None
 
+            # BB extreme position filter: mean reversion works best at band edges
+            # UP only if price near lower band, DOWN only if near upper band
+            if bb_up > bb_low:
+                bb_pos = (price - bb_low) / (bb_up - bb_low)
+                if direction == 'up' and bb_pos > 0.10:
+                    return None
+                if direction == 'down' and bb_pos < 0.90:
+                    return None
+
         # Build signal
         return {
             'symbol': symbol,
