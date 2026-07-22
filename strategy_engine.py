@@ -279,6 +279,17 @@ class StrategyEngine:
                 if direction == 'down' and bb_pos < 0.90:
                     return None
 
+            # 15m divergence filter: skip signals where 15m chart strongly agrees
+            # When both 5m AND 15m are extreme, the trend is too mature for mean reversion.
+            # Best signals: 5m extreme but 15m hasn't caught up yet (early entry).
+            idx_15 = indicator.get_15m_idx(ts_5m)
+            if idx_15 >= 0:
+                rsi15 = indicator.get('rsi15m', idx_15)
+                if direction == 'up' and rsi15 < 35:
+                    return None  # 15m also deeply oversold, trend may continue
+                if direction == 'down' and rsi15 > 65:
+                    return None  # 15m also deeply overbought, trend may continue
+
         # Build signal
         return {
             'symbol': symbol,

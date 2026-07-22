@@ -37,6 +37,7 @@ class IndicatorEngine:
         lows = [c[3] for c in candles_5m]
         volumes = [c[5] for c in candles_5m]
 
+        c15 = [c[4] for c in candles_15m]
         c1h = [c[4] for c in candles_1h]
         h1h = [c[2] for c in candles_1h]
         l1h = [c[3] for c in candles_1h]
@@ -48,6 +49,7 @@ class IndicatorEngine:
         # Core indicators
         self._cache['rsi7'] = rsi(closes, 7)
         self._cache['rsi14'] = rsi(closes, 14)
+        self._cache['rsi15m'] = rsi(c15, 7)  # 15m RSI for TF confluence check
         self._cache['ma5'] = sma(closes, 5)
         self._cache['ma10'] = sma(closes, 10)
         self._cache['ma20'] = sma(closes, 20)
@@ -99,6 +101,7 @@ class IndicatorEngine:
         self._cache['_lows'] = lows
         self._cache['_volumes'] = volumes
         self._cache['_t5'] = [c[0] for c in candles_5m]
+        self._cache['_t15'] = [c[0] for c in candles_15m]
         self._cache['_t1h'] = [c[0] for c in candles_1h]
 
     def get(self, name: str, idx: int = -1):
@@ -129,6 +132,11 @@ class IndicatorEngine:
             if t1h[i] <= target_ts:
                 return i
         return -1
+
+    def get_15m_idx(self, target_ts: float) -> int:
+        """Get the 15m candle index corresponding to a 5m timestamp."""
+        t15 = self._cache.get('_t15', [])
+        return self.tf_idx(t15, target_ts)
 
     def get_1h_idx(self, target_ts: float) -> int:
         """Get the 1h candle index corresponding to a 5m timestamp."""
