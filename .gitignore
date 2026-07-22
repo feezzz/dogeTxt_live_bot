@@ -1,0 +1,23 @@
+# Logs
+logs/
+*.log
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code
+**/.claude/
+
+# Config with secrets (copy config.example.yaml to config.yaml)
+config.yaml
