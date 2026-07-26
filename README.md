@@ -9,15 +9,14 @@
 ├── data_stream.py       # Binance WebSocket + REST 数据流
 ├── indicator_engine.py  # 指标计算引擎（RSI/MFI/CCI/KDJ/BB 等 20+ 指标）
 ├── strategy_engine.py   # V3 集成打分策略（14 个打分组件）
-├── risk_manager.py      # 风控：日限额、冷却、连亏熔断
 ├── state_tracker.py     # 状态跟踪：CSV 记录 + 事件合约自动结算
-├── notifier.py          # PushPlus 微信推送通知
+├── notifier.py          # PushPlus 微信推送通知 + 连亏提醒
 ├── daily_stats.py       # 每日信号统计报告
 ├── test_signal.py       # 历史数据回放测试
+├── config.example.yaml  # 配置文件模板
 ├── config.yaml          # 配置文件（含 PushPlus token，不提交 git）
-├── run.py               # 启动脚本
 ├── requirements.txt     # 依赖
-└── logs/                # 信号和结算 CSV 日志（自动生成）
+└── logs/                # 日志和结算 CSV（自动生成）
 ```
 
 依赖同目录下的 `event_backtest/` 模块（需单独 clone，与本仓库在同级目录下）。
