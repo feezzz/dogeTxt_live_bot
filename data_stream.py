@@ -281,8 +281,14 @@ class DataStream:
 
     async def _on_candle_close(self, symbol: str, candle: List[float]):
         """Notify all callbacks when a new 5m candle closes."""
-        # Also update 15m and 1h candles by pulling fresh data
-        await self._refresh_higher_tf(symbol)
+        # Only refresh higher TF when their candles actually close
+        close_ms = candle[0] + 5 * 60 * 1000
+        close_min = (close_ms // 60000) % 60  # minute of the hour (0-59)
+        for tf in ['15m', '1h']:
+            if tf == '1h' and close_min == 0:
+                await self._refresh_tf(symbol, tf)
+            elif tf == '15m' and close_min % 15 == 0:
+                await self._refresh_tf(symbol, tf)
 
         for cb in self._callbacks:
             try:
@@ -290,18 +296,16 @@ class DataStream:
             except Exception as e:
                 logger.error("Callback error: %s", e)
 
-    async def _refresh_higher_tf(self, symbol: str):
-        """Refresh 15m and 1h candles after 5m update."""
-        for tf in ['15m', '1h']:
-            try:
-                fresh = await self._fetch_klines_rest(symbol, tf, 200)
-                if fresh:
-                    self._candles[symbol][tf] = fresh
-                elif not self._candles[symbol].get(tf):
-                    # REST failed and we have nothing — try cache once
-                    self._candles[symbol][tf] = self._load_from_cache(symbol, tf, 200)
-            except Exception:
-                pass
+    async def _refresh_tf(self, symbol: str, tf: str):
+        """Refresh a single timeframe from REST."""
+        try:
+            fresh = await self._fetch_klines_rest(symbol, tf, 200)
+            if fresh:
+                self._candles[symbol][tf] = fresh
+            elif not self._candles[symbol].get(tf):
+                self._candles[symbol][tf] = self._load_from_cache(symbol, tf, 200)
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Public access
