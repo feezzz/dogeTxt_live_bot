@@ -116,6 +116,12 @@ risk:
   daily_loss_limit: 75
   max_consecutive_loss: 3
   low_vol_hours: [22, 23, 0, 1, 2, 3, 4, 5]
+
+# 代理设置（大陆需开启，香港/海外关闭）
+proxy:
+  enabled: true             # true=走代理, false=直连
+  host: "127.0.0.1"
+  port: 7892
 ```
 
 ## 回测结论
