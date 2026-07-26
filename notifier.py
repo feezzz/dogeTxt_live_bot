@@ -106,7 +106,7 @@ class Notifier:
                 lines.append(f"已结算: {won}胜/{total_s - won}负 | 胜率: {wr:.0f}% | 盈亏: ${pnl:+.2f}")
 
                 # Per timeframe
-                for tf in ['10m', '30m']:
+                for tf in ['10m']:
                     ss = [s for s in settled_7_23 if s.get('timeframe', '10m') == tf]
                     if ss:
                         w = sum(1 for s in ss if s['result'] == 'WIN')

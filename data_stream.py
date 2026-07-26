@@ -56,6 +56,7 @@ class DataStream:
         self._session: Optional[aiohttp.ClientSession] = None
         self._rest_task: Optional[asyncio.Task] = None
         self._ws_stream_ids: Dict[int, str] = {}  # stream id -> symbol
+        self._last_close_ts: Dict[str, int] = {}  # symbol -> last processed kline close time ms
 
     # ------------------------------------------------------------------
     # Initialization
@@ -63,6 +64,7 @@ class DataStream:
     async def start(self, symbols: List[str]):
         """Fetch initial data then connect WebSocket."""
         self._running = True
+        self._started_at = datetime.now().timestamp() * 1000  # ms, filter stale WS replays
         self._session = aiohttp.ClientSession(proxy=HTTP_PROXY)
 
         for sym in symbols:
@@ -198,12 +200,30 @@ class DataStream:
         if not kline.get('x'):  # x = is this kline closed?
             return  # Only process closed candles
 
+        k_open_ms = kline.get('t', 0)
+        k_close_ms = k_open_ms + 5 * 60 * 1000  # 5m candle close time
+
+        # Skip stale candles replayed on WS connect/reconnect
+        if k_open_ms and k_close_ms < self._started_at:
+            return
+
+        # Skip candles whose close time is in the future (Binance edge case)
+        now_ms = datetime.now().timestamp() * 1000
+        if k_close_ms > now_ms + 60 * 1000:
+            return
+
         symbol = data.get('s', '')
         if symbol not in self._candles:
             return
 
+        # Skip if this candle close time is not newer than last processed
+        last_close = self._last_close_ts.get(symbol, 0)
+        if k_close_ms <= last_close:
+            return
+
         k = normalize_kline(kline)
         self._add_candle(symbol, '5m', k)
+        self._last_close_ts[symbol] = k_close_ms
         await self._on_candle_close(symbol, k)
 
     # ------------------------------------------------------------------

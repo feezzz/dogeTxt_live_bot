@@ -17,8 +17,10 @@ class StrategyEngine:
     def __init__(self, config: dict):
         self._score_threshold = config.get('score_threshold', 5.0)
         self._preview_threshold = config.get('preview_threshold', 3.0)
-        self._min_atr_pct = config.get('min_atr_pct', 0.08)
+        self._min_atr_pct_default = config.get('min_atr_pct', 0.08)
+        self._min_atr_pct_map = config.get('min_atr_pct_map', {})
         self._low_vol_hours = set(config.get('low_vol_hours', []))
+        self._call_count = 0  # DEBUG
 
     def evaluate(self, indicator: IndicatorEngine,
                  symbol: str, candle_ts: float,
@@ -28,16 +30,42 @@ class StrategyEngine:
         Called on each 5m candle close.
         Pass idx_5m to evaluate a specific historical candle (for backtesting).
         """
+        self._call_count += 1
         price = indicator.get('_closes', idx_5m)
         ts_5m = indicator.get('_t5', idx_5m)
 
         if not isinstance(ts_5m, (int, float)) or ts_5m == 0:
+            if self._call_count <= 3:
+                logger.warning("%s evaluate blocked: ts_5m=%s type=%s",
+                              symbol, ts_5m, type(ts_5m).__name__)
             return None
 
-        # ATR filter
+        # ATR filter (per-symbol aware: BTC has lower ATR% due to higher price)
         atr_pct = indicator.get('atr_pct', idx_5m)
-        if atr_pct < self._min_atr_pct:
+        min_atr = self._min_atr_pct_map.get(symbol, self._min_atr_pct_default)
+        if atr_pct < min_atr:
+            if self._call_count <= 3 or self._call_count % 20 == 0:
+                logger.warning("%s ATR too low: atr_pct=%.4f < min=%.4f (call #%d)",
+                              symbol, atr_pct, min_atr, self._call_count)
             return None
+
+        # DEBUG: log every 10th call
+        rsi7_raw = indicator.get('rsi7', idx_5m)
+        if self._call_count % 10 == 1:
+            # Get raw score estimate first
+            bb_up = indicator.get('bb_up', idx_5m)
+            bb_low = indicator.get('bb_low', idx_5m)
+            bb_pos = (price - bb_low) / (bb_up - bb_low) if bb_up > bb_low else 0.5
+            idx_15 = indicator.get_15m_idx(ts_5m)
+            rsi15 = indicator.get('rsi15m', idx_15) if idx_15 >= 0 else -1
+            logger.info(
+                "%s DEBUG #%d: price=%.2f atr=%.3f rsi7=%.0f mfi=%.0f "
+                "stochK=%.0f bb_pos=%.2f rsi15=%.0f",
+                symbol, self._call_count, price, atr_pct, rsi7_raw,
+                indicator.get('mfi', idx_5m),
+                indicator.get('stoch_k', idx_5m),
+                bb_pos, rsi15
+            )
 
         # Get 1h index
         idx_1h = indicator.get_1h_idx(ts_5m)

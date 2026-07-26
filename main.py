@@ -36,7 +36,7 @@ def load_config(path: str = CONFIG_PATH) -> dict:
         logger.warning("No config.yaml found, using defaults. Copy config.yaml and set your PushPlus token.")
         return {
             'symbols': ['ETHUSDT'],
-            'strategy': {'score_threshold': 5.0, 'cooldown_candles': 2, 'max_daily_trades': 30, 'min_atr_pct': 0.08},
+            'strategy': {'score_threshold': 3.0, 'preview_threshold': 3.0, 'cooldown_candles': 2, 'max_daily_trades': 30, 'min_atr_pct': 0.05, 'min_atr_pct_map': {'ETHUSDT': 0.05, 'BTCUSDT': 0.03}},
             'risk': {'daily_loss_limit': 75, 'max_consecutive_loss': 3, 'low_vol_hours': [22, 23, 0, 1, 2, 3, 4, 5]},
             'notification': {'signal_enabled': True, 'summary_enabled': True, 'signal_cooldown_minutes': 5},
             'pushplus_token': '',
@@ -116,7 +116,7 @@ class SignalBot:
         """
         ts = candle[0]
         dt = datetime.fromtimestamp(ts / 1000)
-        logger.debug("%s 5m candle closed at %s", symbol, dt.strftime('%H:%M'))
+        logger.info("%s 5m candle closed at %s", symbol, dt.strftime('%H:%M:%S'))
 
         # Get all timeframe data
         candles_5m = self._data.get_candles(symbol, '5m')
@@ -232,7 +232,7 @@ def _show_windows_popup(signal: dict):
     time_str = dt.strftime('%Y-%m-%d %H:%M:%S')
 
     tag = '【预览】' if is_preview else '【正式】'
-    tf_note = '' if is_preview else '  10m(80%) + 30m(85%)'
+    tf_note = '' if is_preview else '  10m(80%)'
     msg = (
         f"{tag} {symbol}  {direction_cn}{tf_note}\n"
         f"────────────────────────\n"
