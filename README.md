@@ -1,6 +1,6 @@
 # DogeTxt Live Bot
 
-加密货币事件合约实时信号机器人。监控 ETHUSDT/BTCUSDT 5 分钟 K 线，运行 V3 多指标集成策略，生成 10 分钟事件合约交易信号，通过 PushPlus 推送到微信。
+加密货币事件合约实时信号机器人。监控 ETHUSDT/BTCUSDT 5 分钟 K 线，运行 V3 多指标集成策略，生成 10 分钟事件合约交易信号，通过 PushPlus（微信）和/或飞书机器人推送通知。
 
 ## 项目结构
 
@@ -10,7 +10,7 @@
 ├── indicator_engine.py  # 指标计算引擎（RSI/MFI/CCI/KDJ/BB 等 20+ 指标）
 ├── strategy_engine.py   # V3 集成打分策略（14 个打分组件）
 ├── state_tracker.py     # 状态跟踪：CSV 记录 + 事件合约自动结算
-├── notifier.py          # PushPlus 微信推送通知 + 连亏提醒
+├── notifier.py          # 推送通知：PushPlus（微信）+ 飞书机器人 + 连亏提醒
 ├── daily_stats.py       # 每日信号统计报告
 ├── test_signal.py       # 历史数据回放测试
 ├── config.example.yaml  # 配置文件模板
@@ -35,8 +35,12 @@ pip install -r requirements.txt
 
 ```bash
 cp config.example.yaml config.yaml
-# 编辑 config.yaml，填入你的 PushPlus token（可选，不填则仅控制台输出）
-# PushPlus 注册: https://www.pushplus.plus
+# 编辑 config.yaml：
+#   - PushPlus token（可选，注册: https://www.pushplus.plus）
+#   - 飞书 webhook URL（推荐，体验最好）
+#   - 代理设置（大陆开启，海外关闭）
+#
+# 飞书配置：任意群 → 设置 → 群机器人 → 添加自定义机器人 → 复制 Webhook 地址
 ```
 
 ### 3. 启动
@@ -122,6 +126,9 @@ strategy:
 alerts:
   loss_streak_enabled: true
   loss_streak_thresholds: [3, 5]  # 连亏达到这些笔数时推送
+
+# 飞书机器人推送（可选，留空则不启用）
+feishu_webhook_url: ""     # 飞书群 → 设置 → 群机器人 → Webhook 地址
 
 # 代理设置（大陆需开启，香港/海外关闭）
 proxy:
