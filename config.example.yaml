@@ -1,7 +1,7 @@
 # PushPlus 微信推送 token
 # 注册地址: https://www.pushplus.plus
 # 登录后在一键推送页面获取你的token
-pushplus_token: "YOUR_PUSHLUS_TOKEN_HERE"
+pushplus_token: "YOUR_PUSPLUS_TOKEN_HERE"
 
 # 监控的交易对
 symbols:
@@ -24,11 +24,10 @@ strategy:
       settle_bars: 2          # 2根5m K线 = 10分钟
       payout: 0.80            # 赔率 80%
 
-# 风控参数
-risk:
-  daily_loss_limit: 75        # 单日亏损熔断（USD）
-  max_consecutive_loss: 3     # 连亏暂停数
-  low_vol_hours: [22, 23, 0, 1, 2, 3, 4, 5]  # UTC低波动时段，此期间信号受限
+# 连续亏损提醒（仅提醒，不暂停信号）
+alerts:
+  loss_streak_enabled: true
+  loss_streak_thresholds: [3, 5]  # 连亏达到这些笔数时推送提醒
 
 # 通知设置
 notification:

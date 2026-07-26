@@ -14,8 +14,8 @@ import websockets
 
 logger = logging.getLogger(__name__)
 
-# Binance WebSocket stream
-WS_URL = "wss://stream.binance.com/ws"
+# Binance combined WebSocket stream (multi-stream endpoint)
+WS_URL = "wss://stream.binance.com:9443/stream"
 # Binance REST API
 REST_URL = "https://api.binance.com/api/v3/klines"
 # Cache directory (reuse event_backtest cache)
@@ -173,7 +173,7 @@ class DataStream:
     async def _connect_ws(self, symbols: List[str]):
         """Connect and handle WebSocket stream."""
         streams = [f"{sym.lower()}@kline_5m" for sym in symbols]
-        url = f"{WS_URL}/{'/'.join(streams)}"
+        url = f"{WS_URL}?streams={'/'.join(streams)}"
 
         async with websockets.connect(url, proxy=self._proxy) as ws:
             self._ws = ws
@@ -243,8 +243,13 @@ class DataStream:
                     if now - last_ts > 10 * 60 * 1000:
                         fresh = await self._fetch_klines_rest(sym, '5m', 5)
                         for c in fresh:
+                            close_ts = c[0] + 5 * 60 * 1000
+                            # Skip candles that haven't closed yet
+                            if close_ts > now:
+                                continue
                             if c[0] > last_ts:
                                 self._add_candle(sym, '5m', c)
+                                self._last_close_ts[sym] = close_ts
                                 await self._on_candle_close(sym, c)
             except Exception as e:
                 logger.warning("REST fallback error: %s", e)

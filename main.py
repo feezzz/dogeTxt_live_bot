@@ -21,7 +21,6 @@ import yaml
 from data_stream import DataStream
 from indicator_engine import IndicatorEngine
 from strategy_engine import StrategyEngine
-from risk_manager import RiskManager
 from notifier import Notifier
 from state_tracker import StateTracker
 
@@ -37,7 +36,7 @@ def load_config(path: str = CONFIG_PATH) -> dict:
         return {
             'symbols': ['ETHUSDT'],
             'strategy': {'score_threshold': 3.0, 'preview_threshold': 3.0, 'cooldown_candles': 2, 'max_daily_trades': 30, 'min_atr_pct': 0.05, 'min_atr_pct_map': {'ETHUSDT': 0.05, 'BTCUSDT': 0.03}},
-            'risk': {'daily_loss_limit': 75, 'max_consecutive_loss': 3, 'low_vol_hours': [22, 23, 0, 1, 2, 3, 4, 5]},
+            'alerts': {'loss_streak_enabled': True, 'loss_streak_thresholds': [3, 5]},
             'proxy': {'enabled': True, 'host': '127.0.0.1', 'port': 7892},
             'notification': {'signal_enabled': True, 'summary_enabled': True, 'signal_cooldown_minutes': 5},
             'pushplus_token': '',
@@ -53,8 +52,8 @@ class SignalBot:
         self._config = config
         self._symbols = config.get('symbols', ['ETHUSDT'])
         self._strategy_cfg = config.get('strategy', {})
-        self._risk_cfg = config.get('risk', {})
         self._notif_cfg = config.get('notification', {})
+        self._alerts_cfg = config.get('alerts', {})
 
         if console_only:
             self._notif_cfg = dict(self._notif_cfg, signal_enabled=False, summary_enabled=False)
@@ -78,13 +77,20 @@ class SignalBot:
         # Modules
         self._data = DataStream(proxy_url=proxy_url)
         self._indicators: dict[str, IndicatorEngine] = {}
-        self._strategy = StrategyEngine({**self._strategy_cfg, 'low_vol_hours': self._risk_cfg.get('low_vol_hours', [])})
-        self._risk = RiskManager(self._risk_cfg)
+        self._strategy = StrategyEngine(self._strategy_cfg)
         self._notifier = Notifier({
             'pushplus_token': config.get('pushplus_token', ''),
             **self._notif_cfg,
+            **self._alerts_cfg,
         })
-        self._tracker = StateTracker()
+
+        # Unified log directory
+        log_dir = os.path.join(os.path.dirname(__file__), 'logs')
+        self._tracker = StateTracker(log_dir)
+
+        # Per-symbol consecutive loss tracking
+        self._loss_streak: dict[str, int] = {sym: 0 for sym in self._symbols}
+        self._loss_streak_alerted: dict[str, set] = {sym: set() for sym in self._symbols}
 
         # Initialize indicator engines per symbol
         for sym in self._symbols:
@@ -143,15 +149,14 @@ class SignalBot:
         engine = self._indicators[symbol]
         engine.update(candles_5m, candles_15m, candles_1h)
 
-        # Update risk manager candle counter
-        self._risk.increment_candle(symbol)
-        self._risk.check_daily_reset(ts)
         self._tracker.increment_candle(symbol)
 
-        # Settle pending signals
-        self._tracker.settle(symbol, candle[4], ts)
+        # Settle pending signals and track loss streaks
+        settled = self._tracker.settle(symbol, candle[4], ts)
+        for result in settled:
+            await self._on_settlement(symbol, result)
 
-        # Run strategy
+        # Run strategy (no signal blocking — strategy filters only)
         signal = self._strategy.evaluate(engine, symbol, ts)
         if signal is None:
             return
@@ -172,14 +177,6 @@ class SignalBot:
             print(f"   打分原因: {reasons_str}")
             print(f"{'='*60}\n")
             return
-
-        # Risk check (once per signal, before splitting into timeframes)
-        allowed, reason = self._risk.can_signal(symbol, signal, ts)
-        if not allowed:
-            logger.info("%s signal blocked: %s (score=%.1f)", symbol, reason, signal['score'])
-            return
-
-        self._risk.record_signal(symbol)
 
         # Split into configured timeframes
         for tf_name, tf_cfg in sorted(self._timeframes.items()):
@@ -206,6 +203,21 @@ class SignalBot:
             signal['score'], signal['regime'],
             signal['price'], signal['rsi7']
         )
+
+    async def _on_settlement(self, symbol: str, result: dict):
+        """Handle a settled trade result: update loss streak, alert if needed."""
+        if result['result'] == 'WIN':
+            self._loss_streak[symbol] = 0
+            self._loss_streak_alerted[symbol] = set()
+            return
+
+        self._loss_streak[symbol] += 1
+        streak = self._loss_streak[symbol]
+
+        thresholds = self._alerts_cfg.get('loss_streak_thresholds', [3, 5])
+        if streak in thresholds and streak not in self._loss_streak_alerted[symbol]:
+            self._loss_streak_alerted[symbol].add(streak)
+            await self._notifier.send_loss_streak_alert(symbol, streak, result)
 
     async def _shutdown(self):
         """Clean shutdown."""

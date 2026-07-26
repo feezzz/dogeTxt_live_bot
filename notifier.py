@@ -9,7 +9,7 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-PUSHPLUS_URL = "http://www.pushplus.plus/send"
+PUSHPLUS_URL = "https://www.pushplus.plus/send"
 BEIJING_TZ = timezone(timedelta(hours=8))
 
 
@@ -57,7 +57,7 @@ class Notifier:
 
         content = "\n".join(lines)
 
-        if self._signal_enabled and self._token and self._token != 'YOUR_PUSPLUS_TOKEN_HERE':
+        if self._signal_enabled and self._token and 'YOUR_PUS' not in self._token:
             await self._push(content, f"{symbol} {direction_cn} 信号")
         else:
             # Console-only mode
@@ -65,6 +65,8 @@ class Notifier:
             print(content)
             print(f"{'='*60}\n")
             logger.info("Signal: %s", content.replace('\n', ' | '))
+
+        self._last_signal_time[symbol] = now
 
     async def send_daily_summary(self, signals_today: list, settled: list = None):
         """Send daily summary at end of Beijing day."""
@@ -127,7 +129,7 @@ class Notifier:
 
         content = "\n".join(lines)
 
-        if self._summary_enabled and self._token and self._token != 'YOUR_PUSPLUS_TOKEN_HERE':
+        if self._summary_enabled and self._token and 'YOUR_PUS' not in self._token:
             await self._push(content, "每日交易总结")
         else:
             print(f"\n{content}\n")
@@ -144,13 +146,33 @@ class Notifier:
             f"日限额: {config.get('max_daily_trades', 50)}笔\n"
             f"时间: {datetime.now(BEIJING_TZ).strftime('%Y-%m-%d %H:%M:%S')}"
         )
-        if self._token and self._token != 'YOUR_PUSPLUS_TOKEN_HERE':
+        if self._token and 'YOUR_PUS' not in self._token:
             await self._push(content, "机器人启动")
         print(f"\n{content}\n")
 
+    async def send_loss_streak_alert(self, symbol: str, streak: int, result: dict):
+        """Send a consecutive loss alert to WeChat and console."""
+        level = '‼️ 严重提醒' if streak >= 5 else '⚠️ 注意提醒'
+        content = (
+            f"{level}\n"
+            f"{symbol} 连续亏损: {streak} 笔\n"
+            f"最近方向: {result['direction']}\n"
+            f"入场价: ${result['entry_price']:.2f}\n"
+            f"结算价: ${result['exit_price']:.2f}\n"
+            f"得分: {result['score']:.1f}"
+        )
+
+        print(f"\n{'!' * 60}")
+        print(content)
+        print(f"{'!' * 60}\n")
+        logger.warning("%s consecutive losses: %d", symbol, streak)
+
+        if self._token and 'YOUR_PUS' not in self._token:
+            await self._push(content, f"{symbol} 连亏{streak}笔提醒")
+
     async def _push(self, content: str, title: str = ""):
         """Send via PushPlus API."""
-        if not self._token or self._token == 'YOUR_PUSPLUS_TOKEN_HERE':
+        if not self._token or 'YOUR_PUS' in self._token:
             return
         try:
             async with httpx.AsyncClient(timeout=10) as client:
