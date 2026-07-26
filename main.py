@@ -104,16 +104,16 @@ class SignalBot:
     async def run(self):
         """Start the bot."""
         self._running = True
-
-        # Startup notification
-        await self._notifier.send_startup(self._symbols, {**self._strategy_cfg, **self._alerts_cfg})
         logger.info("Bot starting for symbols: %s", self._symbols)
 
         # Register candle close callback
         self._data.on_candle_close(self._on_candle_close)
 
-        # Start data stream
+        # Start data stream (connect WS + fetch initial data)
         await self._data.start(self._symbols)
+
+        # Startup notification (only after data stream is live)
+        await self._notifier.send_startup(self._symbols, {**self._strategy_cfg, **self._alerts_cfg})
 
         logger.info("Bot running. Waiting for 5m candle closes...")
         print("\n[Bot is running. Press Ctrl+C to stop.]\n")
