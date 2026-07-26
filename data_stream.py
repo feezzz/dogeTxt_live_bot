@@ -18,8 +18,6 @@ logger = logging.getLogger(__name__)
 WS_URL = "wss://stream.binance.com/ws"
 # Binance REST API
 REST_URL = "https://api.binance.com/api/v3/klines"
-# HTTP proxy for REST requests (same as event_backtest/data_fetcher.py)
-HTTP_PROXY = "http://127.0.0.1:7892"
 # Cache directory (reuse event_backtest cache)
 CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))), 'event_backtest', 'cache')
@@ -48,7 +46,8 @@ def normalize_kline(k: dict) -> List[float]:
 class DataStream:
     """Real-time multi-symbol, multi-timeframe K-line data stream."""
 
-    def __init__(self):
+    def __init__(self, proxy_url: str = ""):
+        self._proxy = proxy_url or None
         self._candles: Dict[str, Dict[str, List[List[float]]]] = {}  # symbol -> {tf: [kline,...]}
         self._callbacks: List[Callable] = []
         self._running = False
@@ -65,7 +64,7 @@ class DataStream:
         """Fetch initial data then connect WebSocket."""
         self._running = True
         self._started_at = datetime.now().timestamp() * 1000  # ms, filter stale WS replays
-        self._session = aiohttp.ClientSession(proxy=HTTP_PROXY)
+        self._session = aiohttp.ClientSession(proxy=self._proxy)
 
         for sym in symbols:
             self._candles[sym] = {}
@@ -176,7 +175,7 @@ class DataStream:
         streams = [f"{sym.lower()}@kline_5m" for sym in symbols]
         url = f"{WS_URL}/{'/'.join(streams)}"
 
-        async with websockets.connect(url, proxy=HTTP_PROXY) as ws:
+        async with websockets.connect(url, proxy=self._proxy) as ws:
             self._ws = ws
             logger.info("WebSocket connected: %s", streams)
 

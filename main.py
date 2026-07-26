@@ -38,6 +38,7 @@ def load_config(path: str = CONFIG_PATH) -> dict:
             'symbols': ['ETHUSDT'],
             'strategy': {'score_threshold': 3.0, 'preview_threshold': 3.0, 'cooldown_candles': 2, 'max_daily_trades': 30, 'min_atr_pct': 0.05, 'min_atr_pct_map': {'ETHUSDT': 0.05, 'BTCUSDT': 0.03}},
             'risk': {'daily_loss_limit': 75, 'max_consecutive_loss': 3, 'low_vol_hours': [22, 23, 0, 1, 2, 3, 4, 5]},
+            'proxy': {'enabled': True, 'host': '127.0.0.1', 'port': 7892},
             'notification': {'signal_enabled': True, 'summary_enabled': True, 'signal_cooldown_minutes': 5},
             'pushplus_token': '',
         }
@@ -63,8 +64,19 @@ class SignalBot:
             '10m': {'settle_bars': 2, 'payout': 0.80},
         })
 
+        # Proxy config (enable for mainland China, disable for HK/overseas)
+        proxy_cfg = config.get('proxy', {})
+        proxy_url = ""
+        if proxy_cfg.get('enabled', False):
+            host = proxy_cfg.get('host', '127.0.0.1')
+            port = proxy_cfg.get('port', 7892)
+            proxy_url = f"http://{host}:{port}"
+            logger.info("Proxy enabled: %s", proxy_url)
+        else:
+            logger.info("Proxy disabled (direct connection)")
+
         # Modules
-        self._data = DataStream()
+        self._data = DataStream(proxy_url=proxy_url)
         self._indicators: dict[str, IndicatorEngine] = {}
         self._strategy = StrategyEngine({**self._strategy_cfg, 'low_vol_hours': self._risk_cfg.get('low_vol_hours', [])})
         self._risk = RiskManager(self._risk_cfg)
