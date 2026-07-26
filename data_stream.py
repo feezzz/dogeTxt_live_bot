@@ -56,6 +56,7 @@ class DataStream:
         self._rest_task: Optional[asyncio.Task] = None
         self._ws_stream_ids: Dict[int, str] = {}  # stream id -> symbol
         self._last_close_ts: Dict[str, int] = {}  # symbol -> last processed kline close time ms
+        self._ws_msg_count: int = 0  # diagnostic counter
 
     # ------------------------------------------------------------------
     # Initialization
@@ -199,8 +200,17 @@ class DataStream:
 
     async def _handle_ws_message(self, msg: dict):
         """Parse WebSocket kline message."""
+        self._ws_msg_count += 1
         data = msg.get('data', {})
         kline = data.get('k', {})
+
+        # Diagnostic: log first few and periodic samples to confirm WS is alive
+        if self._ws_msg_count <= 3 or self._ws_msg_count % 100 == 0:
+            logger.info("WS msg #%d: stream=%s x=%s",
+                        self._ws_msg_count,
+                        msg.get('stream', '?'),
+                        kline.get('x'))
+
         if not kline.get('x'):  # x = is this kline closed?
             return  # Only process closed candles
 
@@ -209,6 +219,8 @@ class DataStream:
 
         # Skip stale candles replayed on WS connect/reconnect
         if k_open_ms and k_close_ms < self._started_at:
+            logger.info("WS skip stale: %s close=%s started=%s",
+                        msg.get('stream', '?'), k_close_ms, self._started_at)
             return
 
         # Skip candles whose close time is in the future (Binance edge case)
@@ -218,9 +230,11 @@ class DataStream:
 
         symbol = data.get('s', '')
         if symbol not in self._candles:
+            logger.warning("WS unknown symbol: %s", symbol)
             return
 
         k = normalize_kline(kline)
+        logger.info("WS closed candle: %s close_ms=%s", symbol, k_close_ms)
         await self._process_closed_5m(symbol, k)
 
     # ------------------------------------------------------------------
