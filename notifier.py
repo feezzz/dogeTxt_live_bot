@@ -143,7 +143,7 @@ class Notifier:
             f"🚀 事件合约信号机器人已启动\n"
             f"监控: {', '.join(symbols)} | 周期: {tf_str}\n"
             f"分数阈值: {config.get('score_threshold', 5.0)}\n"
-            f"日限额: {config.get('max_daily_trades', 50)}笔\n"
+            f"连亏提醒: {config.get('loss_streak_thresholds', [3, 5])}\n"
             f"时间: {datetime.now(BEIJING_TZ).strftime('%Y-%m-%d %H:%M:%S')}"
         )
         if self._token and 'YOUR_PUS' not in self._token:

@@ -97,7 +97,7 @@ class DataStream:
     # ------------------------------------------------------------------
     async def _fetch_klines_rest(self, symbol: str, interval: str,
                                   limit: int = 200) -> List[List[float]]:
-        """Fetch klines from REST API."""
+        """Fetch klines from REST API. Filters out unclosed candles."""
         url = f"{REST_URL}?symbol={symbol}&interval={interval}&limit={limit}"
         try:
             async with self._session.get(url, timeout=15) as resp:
@@ -105,8 +105,13 @@ class DataStream:
                     logger.warning("REST fetch %s %s: HTTP %s", symbol, interval, resp.status)
                     return []
                 data = await resp.json()
+                now_ms = int(datetime.now().timestamp() * 1000)
                 result = []
                 for k in data:
+                    close_time = int(k[6])
+                    # Skip candles that haven't closed yet (all timeframes)
+                    if close_time > now_ms:
+                        continue
                     result.append([float(k[0]), float(k[1]), float(k[2]),
                                    float(k[3]), float(k[4]), float(k[5])])
                 return result
@@ -215,15 +220,8 @@ class DataStream:
         if symbol not in self._candles:
             return
 
-        # Skip if this candle close time is not newer than last processed
-        last_close = self._last_close_ts.get(symbol, 0)
-        if k_close_ms <= last_close:
-            return
-
         k = normalize_kline(kline)
-        self._add_candle(symbol, '5m', k)
-        self._last_close_ts[symbol] = k_close_ms
-        await self._on_candle_close(symbol, k)
+        await self._process_closed_5m(symbol, k)
 
     # ------------------------------------------------------------------
     # REST fallback
@@ -243,14 +241,8 @@ class DataStream:
                     if now - last_ts > 10 * 60 * 1000:
                         fresh = await self._fetch_klines_rest(sym, '5m', 5)
                         for c in fresh:
-                            close_ts = c[0] + 5 * 60 * 1000
-                            # Skip candles that haven't closed yet
-                            if close_ts > now:
-                                continue
                             if c[0] > last_ts:
-                                self._add_candle(sym, '5m', c)
-                                self._last_close_ts[sym] = close_ts
-                                await self._on_candle_close(sym, c)
+                                await self._process_closed_5m(sym, c)
             except Exception as e:
                 logger.warning("REST fallback error: %s", e)
             await asyncio.sleep(60)
@@ -277,17 +269,21 @@ class DataStream:
             self._candles[symbol][tf] = candles[-max_size:]
 
     # ------------------------------------------------------------------
-    # Callbacks
+    # Unified closed-candle processing (WS + REST share this path)
     # ------------------------------------------------------------------
-    def on_candle_close(self, callback: Callable):
-        """Register callback: async callback(symbol, candle)."""
-        self._callbacks.append(callback)
+    async def _process_closed_5m(self, symbol: str, candle: List[float]):
+        """Atomically dedup and process a closed 5m candle. Safe for both WS and REST."""
+        close_ts = int(candle[0] + 5 * 60 * 1000)
 
-    async def _on_candle_close(self, symbol: str, candle: List[float]):
-        """Notify all callbacks when a new 5m candle closes."""
+        # Dedup: skip if not newer than last processed close time
+        if close_ts <= self._last_close_ts.get(symbol, 0):
+            return
+
+        self._last_close_ts[symbol] = close_ts
+        self._add_candle(symbol, '5m', candle)
+
         # Only refresh higher TF when their candles actually close
-        close_ms = candle[0] + 5 * 60 * 1000
-        close_min = (close_ms // 60000) % 60  # minute of the hour (0-59)
+        close_min = (close_ts // 60000) % 60
         for tf in ['15m', '1h']:
             if tf == '1h' and close_min == 0:
                 await self._refresh_tf(symbol, tf)
@@ -299,6 +295,13 @@ class DataStream:
                 await cb(symbol, candle)
             except Exception as e:
                 logger.error("Callback error: %s", e)
+
+    # ------------------------------------------------------------------
+    # Callbacks
+    # ------------------------------------------------------------------
+    def on_candle_close(self, callback: Callable):
+        """Register callback: async callback(symbol, candle)."""
+        self._callbacks.append(callback)
 
     async def _refresh_tf(self, symbol: str, tf: str):
         """Refresh a single timeframe from REST."""

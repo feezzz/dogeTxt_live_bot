@@ -35,7 +35,7 @@ def load_config(path: str = CONFIG_PATH) -> dict:
         logger.warning("No config.yaml found, using defaults. Copy config.yaml and set your PushPlus token.")
         return {
             'symbols': ['ETHUSDT'],
-            'strategy': {'score_threshold': 3.0, 'preview_threshold': 3.0, 'cooldown_candles': 2, 'max_daily_trades': 30, 'min_atr_pct': 0.05, 'min_atr_pct_map': {'ETHUSDT': 0.05, 'BTCUSDT': 0.03}},
+            'strategy': {'score_threshold': 3.0, 'preview_threshold': 3.0, 'min_atr_pct': 0.05, 'min_atr_pct_map': {'ETHUSDT': 0.05, 'BTCUSDT': 0.03}},
             'alerts': {'loss_streak_enabled': True, 'loss_streak_thresholds': [3, 5]},
             'proxy': {'enabled': True, 'host': '127.0.0.1', 'port': 7892},
             'notification': {'signal_enabled': True, 'summary_enabled': True, 'signal_cooldown_minutes': 5},
@@ -106,7 +106,7 @@ class SignalBot:
         self._running = True
 
         # Startup notification
-        await self._notifier.send_startup(self._symbols, self._strategy_cfg)
+        await self._notifier.send_startup(self._symbols, {**self._strategy_cfg, **self._alerts_cfg})
         logger.info("Bot starting for symbols: %s", self._symbols)
 
         # Register candle close callback
@@ -132,8 +132,8 @@ class SignalBot:
         Called when a new 5m candle closes.
         This is the core signal pipeline.
         """
-        ts = candle[0]
-        dt = datetime.fromtimestamp(ts / 1000)
+        close_ts = int(candle[0] + 5 * 60 * 1000)
+        dt = datetime.fromtimestamp(close_ts / 1000)
         logger.info("%s 5m candle closed at %s", symbol, dt.strftime('%H:%M:%S'))
 
         # Get all timeframe data
@@ -152,12 +152,12 @@ class SignalBot:
         self._tracker.increment_candle(symbol)
 
         # Settle pending signals and track loss streaks
-        settled = self._tracker.settle(symbol, candle[4], ts)
+        settled = self._tracker.settle(symbol, candle[4], close_ts)
         for result in settled:
             await self._on_settlement(symbol, result)
 
         # Run strategy (no signal blocking — strategy filters only)
-        signal = self._strategy.evaluate(engine, symbol, ts)
+        signal = self._strategy.evaluate(engine, symbol, close_ts)
         if signal is None:
             return
 
@@ -206,6 +206,9 @@ class SignalBot:
 
     async def _on_settlement(self, symbol: str, result: dict):
         """Handle a settled trade result: update loss streak, alert if needed."""
+        if not self._alerts_cfg.get('loss_streak_enabled', True):
+            return
+
         if result['result'] == 'WIN':
             self._loss_streak[symbol] = 0
             self._loss_streak_alerted[symbol] = set()

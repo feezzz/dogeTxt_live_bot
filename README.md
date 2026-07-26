@@ -110,7 +110,6 @@ python test_signal.py --symbol ETHUSDT --start 2026-06-01 --end 2026-07-01 --thr
 strategy:
   score_threshold: 3.0      # 正式信号阈值
   preview_threshold: 3.0    # 预览信号阈值（与正式阈值同级，关闭预览）
-  max_daily_trades: 50      # 日最大信号数
   min_atr_pct: 0.05         # 默认最低波动率过滤
   min_atr_pct_map:          # 分币种 ATR（BTC 价高 ATR% 天然低）
     ETHUSDT: 0.05
