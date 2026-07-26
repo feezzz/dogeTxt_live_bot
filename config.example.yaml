@@ -33,6 +33,10 @@ notification:
   summary_enabled: true       # 是否推送每日总结
   signal_cooldown_minutes: 5  # 同一symbol两次推送最小间隔（分钟）
 
+# 飞书机器人推送（可选，留空则不启用）
+# 飞书群 → 设置 → 群机器人 → 添加自定义机器人 → 复制 Webhook 地址
+feishu_webhook_url: ""
+
 # 代理设置（大陆服务器需开启，香港/海外服务器关闭）
 proxy:
   enabled: true

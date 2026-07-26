@@ -80,6 +80,7 @@ class SignalBot:
         self._strategy = StrategyEngine(self._strategy_cfg)
         self._notifier = Notifier({
             'pushplus_token': config.get('pushplus_token', ''),
+            'feishu_webhook_url': config.get('feishu_webhook_url', ''),
             **self._notif_cfg,
             **self._alerts_cfg,
         })

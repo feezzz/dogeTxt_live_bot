@@ -1,6 +1,5 @@
 """
-PushPlus WeChat push notification + console logging.
-PushPlus: free WeChat push, one HTTP call. Register at https://www.pushplus.plus
+PushPlus WeChat + Feishu Bot notification + console logging.
 """
 import logging
 from datetime import datetime, timezone, timedelta
@@ -14,10 +13,11 @@ BEIJING_TZ = timezone(timedelta(hours=8))
 
 
 class Notifier:
-    """Sends trade signals via PushPlus to WeChat."""
+    """Sends trade signals via PushPlus and/or Feishu Bot."""
 
     def __init__(self, config: dict):
         self._token = config.get('pushplus_token', '')
+        self._feishu_url = config.get('feishu_webhook_url', '')
         self._signal_enabled = config.get('signal_enabled', True)
         self._summary_enabled = config.get('summary_enabled', True)
         self._last_signal_time: dict[str, float] = {}
@@ -67,6 +67,26 @@ class Notifier:
             logger.info("Signal: %s", content.replace('\n', ' | '))
 
         self._last_signal_time[symbol] = now
+
+        # Feishu card
+        if self._feishu_url:
+            color = 'green' if direction == 'up' else 'red'
+            arrow = '▲' if direction == 'up' else '▼'
+            tf_s = ' | '.join(tf_parts) if timeframes else '10m(80%)'
+            body_lines = [
+                f"**价格**：${signal['price']:.2f}  |  **时间**：{dt.strftime('%H:%M')}",
+                f"**得分**：{signal['score']:+.1f}  |  {signal['regime']}行情  |  {tf_s}",
+                f"RSI7：{signal['rsi7']:.0f}  |  MFI：{signal['mfi']:.0f}  |  CCI：{signal['cci']:.0f}",
+                f"StochK：{signal['stoch_k']:.0f}  |  ADX：{signal['adx']:.0f}  |  ATR%：{signal['atr_pct']:.3f}",
+            ]
+            if signal.get('reasons'):
+                body_lines.append(f"**原因**：{' | '.join(signal['reasons'][:4])}")
+            await self._push_feishu(self._feishu_card(
+                header=f"{emoji} {symbol} {direction_cn} {arrow}",
+                template=color,
+                body="\n".join(body_lines),
+                note=f"{dt.strftime('%Y-%m-%d %H:%M')}  |  10m(80%)",
+            ))
 
     async def send_daily_summary(self, signals_today: list, settled: list = None):
         """Send daily summary at end of Beijing day."""
@@ -135,6 +155,15 @@ class Notifier:
             print(f"\n{content}\n")
             logger.info("Daily summary: %s", content.replace('\n', ' | '))
 
+        # Feishu
+        if self._feishu_url:
+            await self._push_feishu(self._feishu_card(
+                header=f"📊 今日信号总结",
+                template="blue",
+                body=content.replace('\n', '\n\n'),
+                note=datetime.now(BEIJING_TZ).strftime('%Y-%m-%d %H:%M'),
+            ))
+
     async def send_startup(self, symbols: list, config: dict):
         """Notify that the bot has started."""
         timeframes = config.get('timeframes', {})
@@ -149,6 +178,15 @@ class Notifier:
         if self._token and 'YOUR_PUS' not in self._token:
             await self._push(content, "机器人启动")
         print(f"\n{content}\n")
+
+        # Feishu
+        if self._feishu_url:
+            await self._push_feishu(self._feishu_card(
+                header="🚀 机器人已启动",
+                template="blue",
+                body=content,
+                note="",
+            ))
 
     async def send_loss_streak_alert(self, symbol: str, streak: int, result: dict):
         """Send a consecutive loss alert to WeChat and console."""
@@ -170,6 +208,15 @@ class Notifier:
         if self._token and 'YOUR_PUS' not in self._token:
             await self._push(content, f"{symbol} 连亏{streak}笔提醒")
 
+        # Feishu
+        if self._feishu_url:
+            await self._push_feishu(self._feishu_card(
+                header=f"{level}",
+                template="red",
+                body=content.replace('\n', '\n\n'),
+                note=datetime.now(BEIJING_TZ).strftime('%Y-%m-%d %H:%M:%S'),
+            ))
+
     async def _push(self, content: str, title: str = ""):
         """Send via PushPlus API."""
         if not self._token or 'YOUR_PUS' in self._token:
@@ -190,3 +237,41 @@ class Notifier:
                     logger.warning("PushPlus HTTP %s", resp.status_code)
         except Exception as e:
             logger.warning("PushPlus push failed: %s", e)
+
+    # ------------------------------------------------------------------
+    # Feishu Bot (Lark) webhook
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _feishu_card(header: str, template: str, body: str, note: str = "") -> dict:
+        """Build a Feishu interactive card message."""
+        elements = [
+            {"tag": "div", "text": {"tag": "lark_md", "content": body}},
+        ]
+        if note:
+            elements.append({"tag": "note", "elements": [{"tag": "plain_text", "content": note}]})
+        return {
+            "msg_type": "interactive",
+            "card": {
+                "header": {
+                    "title": {"tag": "plain_text", "content": header},
+                    "template": template,
+                },
+                "elements": elements,
+            },
+        }
+
+    async def _push_feishu(self, payload: dict):
+        """Send via Feishu webhook."""
+        if not self._feishu_url:
+            return
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(self._feishu_url, json=payload)
+                if resp.status_code != 200:
+                    logger.warning("Feishu HTTP %s: %s", resp.status_code, resp.text)
+                else:
+                    result = resp.json()
+                    if result.get('code') != 0:
+                        logger.warning("Feishu error: %s", result.get('msg'))
+        except Exception as e:
+            logger.warning("Feishu push failed: %s", e)
