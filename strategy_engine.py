@@ -295,7 +295,7 @@ class StrategyEngine:
                 if aroon_osc_val < 30: agree += 1
                 if price < sar: agree += 1
 
-            if agree < 1:
+            if agree < 2:
                 return None
 
             # BB extreme position filter: mean reversion works best at band edges

@@ -10,8 +10,8 @@ symbols:
 
 # V3策略参数
 strategy:
-  score_threshold: 3.0        # 信号触发的最低分数（越高越严格）
-  preview_threshold: 3.0      # 预览触发的最低分数（与正式阈值同级，关闭预览）
+  score_threshold: 5.0        # 信号触发的最低分数（越高越严格，回测最优值）
+  preview_threshold: 5.0      # 预览触发的最低分数（与正式阈值同级，关闭预览）
   min_atr_pct: 0.05           # 默认最低波动率过滤
   min_atr_pct_map:            # 分币种ATR阈值（BTC价高ATR%天然低）
     ETHUSDT: 0.05
