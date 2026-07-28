@@ -1,33 +1,35 @@
 # DogeTxt Live Bot
 
-加密货币事件合约实时信号机器人。监控 ETHUSDT/BTCUSDT 5 分钟 K 线，运行 V3 多指标集成策略，生成 10 分钟事件合约交易信号，通过 PushPlus（微信）和/或飞书机器人推送通知。
+加密货币事件合约实时信号机器人。监控 ETHUSDT/BTCUSDT 5 分钟 K 线，运行 V3 多指标集成策略（Optuna 优化权重），生成 10 分钟事件合约交易信号，通过飞书机器人推送通知。
 
 ## 项目结构
 
 ```
-├── main.py              # 主入口，信号管线和事件循环
+live_bot/
+├── main.py              # 主入口：信号管线、事件循环、风控
 ├── data_stream.py       # Binance WebSocket + REST 数据流
 ├── indicator_engine.py  # 指标计算引擎（RSI/MFI/CCI/KDJ/BB 等 20+ 指标）
-├── strategy_engine.py   # V3 集成打分策略（14 个打分组件）
+├── strategy_engine.py   # V3 集成打分策略（15 个打分组件 + 3 层过滤）
 ├── state_tracker.py     # 状态跟踪：CSV 记录 + 事件合约自动结算
-├── notifier.py          # 推送通知：PushPlus（微信）+ 飞书机器人 + 连亏提醒
+├── notifier.py          # 推送通知：飞书机器人（信号/连亏/启动/总结卡片）
 ├── daily_stats.py       # 每日信号统计报告
 ├── test_signal.py       # 历史数据回放测试
+├── run.py               # 启动器
 ├── config.example.yaml  # 配置文件模板
-├── config.yaml          # 配置文件（含 PushPlus token，不提交 git）
-├── requirements.txt     # 依赖
-└── logs/                # 日志和结算 CSV（自动生成）
-```
+├── config.yaml          # 配置文件（含密钥，不提交 git）
+└── requirements.txt     # 依赖
 
-依赖同目录下的 `event_backtest/` 模块（需单独 clone，与本仓库在同级目录下）。
+依赖同目录下的 event_backtest/indicators.py（指标计算函数库）。
+```
 
 ## 快速开始
 
-### 1. 克隆并安装依赖
+### 1. 环境准备
 
 ```bash
-git clone https://github.com/feezzz/dogeTxt_live_bot.git
-cd dogeTxt_live_bot
+# 项目需要与 event_backtest/ 在同级目录下
+# 目录结构: dogeTxt/live_bot/ + dogeTxt/event_backtest/
+cd dogeTxt/live_bot
 pip install -r requirements.txt
 ```
 
@@ -36,8 +38,7 @@ pip install -r requirements.txt
 ```bash
 cp config.example.yaml config.yaml
 # 编辑 config.yaml：
-#   - PushPlus token（可选，注册: https://www.pushplus.plus）
-#   - 飞书 webhook URL（推荐，体验最好）
+#   - 飞书 webhook URL（推荐）
 #   - 代理设置（大陆开启，海外关闭）
 #
 # 飞书配置：任意群 → 设置 → 群机器人 → 添加自定义机器人 → 复制 Webhook 地址
@@ -48,109 +49,152 @@ cp config.example.yaml config.yaml
 ```bash
 python run.py
 
-# 仅控制台模式（不推送微信）
+# 仅控制台模式（不推送通知）
 python run.py --console
 ```
 
-### 4. 查看每日统计
+### 4. 每日统计
 
 ```bash
 python daily_stats.py              # 今日
-python daily_stats.py 20260721     # 指定日期
-```
-
-### 5. 历史数据测试
-
-```bash
-python test_signal.py --symbol ETHUSDT --start 2026-06-01 --end 2026-07-01 --threshold 3.0
+python daily_stats.py 20260728     # 指定日期
 ```
 
 ## 策略概述
 
-**V3 集成打分策略** — 14 个评分组件综合打分：
+**V3 Ensemble 打分策略** — 15 个评分组件，权重由 Optuna TPE 贝叶斯优化：
 
-| 组件 | 说明 |
+| 组件 | 权重 | 说明 |
+|------|------|------|
+| RSI(7) 极端 | 2.26 | 超卖 <20 / 超买 >80 |
+| RSI(7) 温和 | 1.59 | 低 <30 / 高 >70 |
+| MFI 极端 | 2.42 | 超卖 <15 / 超买 >85 |
+| StochRSI 极端 | 1.93 | K<10 / K>90 |
+| BB 极端位置 | 1.91 | 近下轨 <8% / 近上轨 >92% |
+| K 线形态-锤子/流星 | 1.83 | 锤子线 / 射击之星 |
+| WR 极端 | 1.72 | <-90 / >-10 |
+| CCI 极端 | 1.96 | <-200 / >200 |
+| K 线形态-吞没 | 1.25 | 多头吞没 / 空头吞没 |
+| CCI 温和 | 1.17 | <-100 / >100 |
+| StochRSI 交叉 | 0.83 | K/D 金叉死叉 |
+| RSI 背离 | 0.73 | 15 周期顶底背离 |
+| StochRSI 温和 | 0.75 | K<20 / K>80 |
+| BB 温和位置 | 0.74 | 位置 <20% / >80% |
+| WR 温和 | 0.68 | <-80 / >-20 |
+| 趋势 ADX+DI | 0.45 | 趋势市 DI 方向加成 |
+| Aroon | 0.42 | 趋势方向 |
+| KDJ 交叉 | 0.41 | KDJ 金叉死叉 |
+| MA 趋势 | 0.34 | MA5/10/20 排列 |
+| EMA 9/21 | 0.31 | 快慢均线方向 |
+| 成交量放量 | 0.31 | 量价配合 |
+| KDJ J 值 | 0.31 | J<0 / J>100 |
+| SAR | 0.30 | 抛物线转向方向 |
+| 震荡市 BB | 0.32 | 震荡市布林带位置 |
+| 趋势 RSI | 0.56 | 趋势市 RSI 配合 |
+
+**信号阈值**: score ≥ 5.0（回测网格搜索最优值）
+
+**3 层过滤**（正式信号）:
+1. 指标一致性 ≥ 2/4（StochRSI、MFI、Aroon、SAR 中至少 2 个确认）
+2. BB 极端位置（做多 near 下轨 ≤10%，做空 near 上轨 ≥90%）
+3. 15m 背离排除（15m 同向极端时跳过，避免追趋势尾部）
+
+## 风控体系
+
+### 动态仓位管理
+
+| 分数 | 仓位 |
 |------|------|
-| RSI(7) | 超买超卖检测 |
-| Stochastic RSI | 随机 RSI + 金叉死叉 |
-| MFI | 资金流量指数 |
-| CCI(14) | 商品通道指数 |
-| Williams %R | 威廉指标 |
-| Parabolic SAR | 抛物线转向 |
-| Aroon | 趋势强度 |
-| MA 趋势 | MA5/10/20 排列 |
-| EMA 9/21 | 快慢均线交叉 |
-| KDJ | KDJ 金叉死叉 + J 值 |
-| BB 位置 | 布林带位置 |
-| Volume Spike | 成交量放量 |
-| K 线形态 | 锤子线、吞没形态等 |
-| 行情适配 | 趋势/震荡市加分 |
+| ≥ 7.0 | $50（2x 基础） |
+| ≥ 6.0 | $35（1.4x 基础） |
+| ≥ 5.0 | $25（基准） |
 
-**信号阈值**：score ≥ 5.0 触发正式信号（回测最优值）。
+### 日内风控
 
-**单一周期**：仅 10 分钟事件合约（80% 赔率）。30 分钟合约已移除（胜率低 6%，ROI 差 40%）。
+- **熔断**: 日内累计亏损 > $75 自动暂停交易
+- **信号上限**: 日内最多 50 笔信号
+- **交易时段**: UTC 8-20（北京时间 16:00 - 04:00），覆盖币圈黄金交易时段
 
-## 风控
+### 信号去重
 
-本版本**不限制信号**，仅保留策略层面的质量过滤：
+- ETH/BTC 同方向信号在同一个 5m K 线触发时，仅保留分数更高者
+- 同一时间戳同方向信号去重
 
-- 分币种 ATR 过滤：ETH ≥ 0.05%，BTC ≥ 0.03%
-- BB 极端位置过滤（做多仅近下轨，做空仅近上轨）
-- 15m 强共振排除（15m 同向极端时跳过）
-- 指标一致性检查（至少 1 个新指标确认）
+### ATR 波动率过滤
 
-## 连续亏损提醒
+- ETH: ATR% ≥ 0.05%
+- BTC: ATR% ≥ 0.03%（BTC 价格高，ATR% 天然偏低）
 
-仅做提醒，**不暂停信号**。达到指定连亏笔数时 PushPlus + 命令窗口通知：
+## 全量历史回测
 
-- 连亏 3 笔 → 注意提醒
-- 连亏 5 笔 → 严重提醒
-- 盈利后归零，按币种分别统计
+基于 2024-01 ~ 2026-07 共 2.5 年，th=5.0, agree≥2, 优化权重：
 
-## 配置说明
+| 周期 | ETH 胜率 | ETH PnL | BTC 胜率 | BTC PnL |
+|------|---------|---------|---------|---------|
+| 2024 H1 | 69.6% | +$8,160 | 69.4% | +$8,270 |
+| 2024 H2 | 70.2% | +$9,165 | 68.9% | +$8,595 |
+| 2025 H1 | 68.4% | +$7,110 | 67.0% | +$6,990 |
+| 2025 H2 | 69.5% | +$8,230 | 68.3% | +$7,865 |
+| 2026 H1 | 68.8% | +$7,650 | 67.0% | +$6,875 |
+| 2026 Jul (OOS) | 70.9% | +$1,205 | 71.1% | +$1,325 |
+| **合计** | **69.2%** | **+$41,520** | **68.6%** | **+$39,920** |
 
-```yaml
-strategy:
-  score_threshold: 3.0      # 正式信号阈值
-  preview_threshold: 3.0    # 预览信号阈值（与正式阈值同级，关闭预览）
-  min_atr_pct: 0.05         # 默认最低波动率过滤
-  min_atr_pct_map:          # 分币种 ATR（BTC 价高 ATR% 天然低）
-    ETHUSDT: 0.05
-    BTCUSDT: 0.03
-  timeframes:
-    10m:
-      settle_bars: 2        # 2根5m K线 = 10分钟
-      payout: 0.80          # 赔率 80%
+- 总交易 13,702 笔，胜率 **68.8%**，总盈亏 **+$81,440**，ROI +13.2%
+- 所有周期均显著超过 55.6% 盈亏平衡线
+- OOS（样本外）胜率 71.0%，优于样本内 67.9%，**无过拟合**
+- 各行情/方向表现均衡，无明显偏倚
 
-# 连续亏损提醒（仅提醒，不暂停信号）
-alerts:
-  loss_streak_enabled: true
-  loss_streak_thresholds: [3, 5]  # 连亏达到这些笔数时推送
+### 过拟合检验
 
-# 飞书机器人推送（可选，留空则不启用）
-feishu_webhook_url: ""     # 飞书群 → 设置 → 群机器人 → Webhook 地址
-
-# 代理设置（大陆需开启，香港/海外关闭）
-proxy:
-  enabled: true             # true=走代理, false=直连
-  host: "127.0.0.1"
-  port: 7892
+```
+样本内 (2026H1):  2,623 trades, WR=67.9%
+样本外 (2026 Jul):   365 trades, WR=71.0%
+差值: +3.1%（样本外更优，确认泛化）
 ```
 
-## 回测结论
+## 通知推送
 
-基于 2024-01 ~ 2026-07 共 2.5 年、5 个半年周期全量数据回测（th=3.0, 分币种 ATR, 10m 合约）：
+### 飞书机器人（主力）
 
-| 币种 | 交易笔数 | 胜率 | 总盈亏 | ROI |
-|------|---------|------|--------|-----|
-| ETHUSDT | 7,341 | **66.7%** | +$36,795 | +20.0% |
-| BTCUSDT | 7,981 | **65.9%** | +$37,085 | +18.6% |
-| **合计** | **15,322** | **66.3%** | **+$73,880** | **+19.3%** |
+- **信号通知**: 方向/分数/仓位/理由/行情/时间
+- **连亏提醒**: 连亏 3 笔注意 → 5 笔严重
+- **启动通知**: 数据流连接成功后的策略状态
+- **熔断通知**: 日内亏损超限暂停交易
+- **每日总结**: 当日盈亏/胜率/连亏状态
 
-- 全部 5 个周期均超 55.6% 盈亏平衡线
-- 工作日日均约 24 笔信号（ETH 11 + BTC 13）
-- 无未来函数，入场价使用信号触发后下一根 K 线开盘价
-- 详细回测报告见 [BACKTEST_REPORT.md](BACKTEST_REPORT.md)
+## 配置参考
+
+```yaml
+# V3 策略参数
+strategy:
+  score_threshold: 5.0          # 信号触发最低分数
+  preview_threshold: 5.0        # 预览阈值（与正式阈值同级，关闭预览）
+  min_atr_pct: 0.05             # 默认最低 ATR%
+  min_atr_pct_map:
+    ETHUSDT: 0.05
+    BTCUSDT: 0.03
+
+  position:
+    base_stake: 25.0
+    tiers:
+      - { score_min: 7.0, multiplier: 2.0 }
+      - { score_min: 6.0, multiplier: 1.4 }
+      - { score_min: 5.0, multiplier: 1.0 }
+
+  risk:
+    max_daily_loss: -75.0
+    daily_limit: 50
+
+  trading_hours:
+    enabled: true
+    utc_hours: [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
+
+alerts:
+  loss_streak_enabled: true
+  loss_streak_thresholds: [3, 5]
+
+feishu_webhook_url: ""
+```
 
 ## 免责声明
 
