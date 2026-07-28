@@ -23,7 +23,7 @@ class Notifier:
         self._last_signal_time: dict[str, float] = {}
         self._signal_cooldown_s = config.get('signal_cooldown_minutes', 5) * 60
 
-    async def send_signal(self, signal: dict, timeframes: dict = None):
+    async def send_signal(self, signal: dict, timeframes: dict = None, stake: float = 25.0):
         """Send a trade signal notification to WeChat."""
         symbol = signal['symbol']
         direction = signal['direction']
@@ -48,7 +48,7 @@ class Notifier:
         # Build message
         lines = [
             f"{emoji} **{symbol} {direction_cn}** | 得分 {signal['score']:.1f} | {signal['regime']}行情{tf_str}",
-            f"价格: ${signal['price']:.2f} | 时间: {dt.strftime('%H:%M')}",
+            f"价格: ${signal['price']:.2f} | 仓位: ${stake:.0f} | 时间: {dt.strftime('%H:%M')}",
             f"RSI7={signal['rsi7']:.0f} | MFI={signal['mfi']:.0f} | StochRSI={signal['stoch_k']:.0f}",
             f"ADX={signal['adx']:.0f} | CCI={signal['cci']:.0f} | ATR%={signal['atr_pct']:.3f}",
         ]
@@ -75,7 +75,7 @@ class Notifier:
             tf_s = ' | '.join(tf_parts) if timeframes else '10m(80%)'
             body_lines = [
                 f"**价格**：${signal['price']:.2f}  |  **时间**：{dt.strftime('%H:%M')}",
-                f"**得分**：{signal['score']:+.1f}  |  {signal['regime']}行情  |  {tf_s}",
+                f"**得分**：{signal['score']:+.1f}  |  仓位：${stake:.0f}  |  {signal['regime']}行情  |  {tf_s}",
                 f"RSI7：{signal['rsi7']:.0f}  |  MFI：{signal['mfi']:.0f}  |  CCI：{signal['cci']:.0f}",
                 f"StochK：{signal['stoch_k']:.0f}  |  ADX：{signal['adx']:.0f}  |  ATR%：{signal['atr_pct']:.3f}",
             ]
@@ -212,6 +212,30 @@ class Notifier:
         if self._feishu_url:
             await self._push_feishu(self._feishu_card(
                 header=f"{level}",
+                template="red",
+                body=content.replace('\n', '\n\n'),
+                note=datetime.now(BEIJING_TZ).strftime('%Y-%m-%d %H:%M:%S'),
+            ))
+
+    async def send_circuit_breaker(self, symbol: str, daily_pnl: float, max_loss: float):
+        """Notify that daily loss circuit breaker has been triggered."""
+        content = (
+            f"🛑 **日内熔断触发**\n"
+            f"当前累计盈亏: ${daily_pnl:+.2f}\n"
+            f"熔断阈值: ${max_loss:+.0f}\n"
+            f"今日剩余时间暂停所有信号\n"
+            f"触发品种: {symbol}\n"
+            f"时间: {datetime.now(BEIJING_TZ).strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+
+        print(f"\n{'#'*60}")
+        print(content)
+        print(f"{'#'*60}\n")
+        logger.warning("Circuit breaker: daily PnL=$%.2f, max=$%.0f", daily_pnl, max_loss)
+
+        if self._feishu_url:
+            await self._push_feishu(self._feishu_card(
+                header="🛑 日内熔断已触发",
                 template="red",
                 body=content.replace('\n', '\n\n'),
                 note=datetime.now(BEIJING_TZ).strftime('%Y-%m-%d %H:%M:%S'),

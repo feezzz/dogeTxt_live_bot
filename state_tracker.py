@@ -178,7 +178,7 @@ class StateTracker:
         """Evaluate a signal against exit price."""
         direction = signal['direction']
         entry = signal['price']
-        stake = 25.0
+        stake = signal.get('stake', 25.0)
         payout = stake * payout_rate
 
         if direction == 'up':

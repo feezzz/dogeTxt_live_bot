@@ -22,6 +22,24 @@ strategy:
       settle_bars: 2          # 2根5m K线 = 10分钟
       payout: 0.80            # 赔率 80%
 
+  # 动态仓位管理
+  position:
+    base_stake: 25.0             # 基础仓位($)
+    tiers:                       # 按信号分数分档，乘数叠加
+      - { score_min: 7.0, multiplier: 2.0 }   # ≥7分 → $50
+      - { score_min: 6.0, multiplier: 1.4 }   # ≥6分 → $35
+      - { score_min: 5.0, multiplier: 1.0 }   # ≥5分 → $25（基准）
+
+  # 风险管理
+  risk:
+    max_daily_loss: -75.0        # 日内累计亏损超过此值则暂停交易
+    daily_limit: 50              # 日内最大信号数
+
+  # 交易时段过滤（UTC时间，北京时间=UTC+8）
+  trading_hours:
+    enabled: true
+    utc_hours: [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]  # 北京时间 16:00-04:00
+
 # 连续亏损提醒（仅提醒，不暂停信号）
 alerts:
   loss_streak_enabled: true

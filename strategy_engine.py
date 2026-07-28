@@ -100,115 +100,115 @@ class StrategyEngine:
         # --- RSI(7) ---
         rsi7 = indicator.get('rsi7', idx_5m)
         if rsi7 < 20:
-            score += 2.0; reasons.append(f'RSI7={rsi7:.0f}(超卖)')
+            score += 2.26; reasons.append(f'RSI7={rsi7:.0f}(超卖)')
         elif rsi7 < 30:
-            score += 1.2; reasons.append(f'RSI7={rsi7:.0f}(低)')
+            score += 1.59; reasons.append(f'RSI7={rsi7:.0f}(低)')
         elif rsi7 < 40:
-            score += 0.3
+            score += 0.29
         elif rsi7 > 80:
-            score -= 2.0; reasons.append(f'RSI7={rsi7:.0f}(超买)')
+            score -= 2.26; reasons.append(f'RSI7={rsi7:.0f}(超买)')
         elif rsi7 > 70:
-            score -= 1.2; reasons.append(f'RSI7={rsi7:.0f}(高)')
+            score -= 1.59; reasons.append(f'RSI7={rsi7:.0f}(高)')
         elif rsi7 > 60:
-            score -= 0.3
+            score -= 0.29
 
         # --- Stochastic RSI ---
         stoch_k = indicator.get('stoch_k', idx_5m)
         stoch_d = indicator.get('stoch_d', idx_5m)
         if stoch_k < 10 and stoch_d < 15:
-            score += 1.5; reasons.append(f'StochRSI={stoch_k:.0f}(极低)')
+            score += 1.93; reasons.append(f'StochRSI={stoch_k:.0f}(极低)')
         elif stoch_k < 20:
-            score += 0.5
+            score += 0.75
         elif stoch_k > 90 and stoch_d > 85:
-            score -= 1.5; reasons.append(f'StochRSI={stoch_k:.0f}(极高)')
+            score -= 1.93; reasons.append(f'StochRSI={stoch_k:.0f}(极高)')
         elif stoch_k > 80:
-            score -= 0.5
+            score -= 0.75
 
         # Stoch RSI cross
         stoch_k_prev = indicator.get('stoch_k', -2)
         stoch_d_prev = indicator.get('stoch_d', -2)
         if stoch_k_prev <= stoch_d_prev and stoch_k > stoch_d:
-            score += 0.8
+            score += 0.83
         elif stoch_k_prev >= stoch_d_prev and stoch_k < stoch_d:
-            score -= 0.8
+            score -= 0.83
 
         # --- MFI ---
         mfi = indicator.get('mfi', idx_5m)
         if mfi < 15:
-            score += 1.5; reasons.append(f'MFI={mfi:.0f}(超卖)')
+            score += 2.42; reasons.append(f'MFI={mfi:.0f}(超卖)')
         elif mfi < 25:
-            score += 0.5
+            score += 1.00
         elif mfi > 85:
-            score -= 1.5; reasons.append(f'MFI={mfi:.0f}(超买)')
+            score -= 2.42; reasons.append(f'MFI={mfi:.0f}(超买)')
         elif mfi > 75:
-            score -= 0.5
+            score -= 1.00
 
         # --- CCI ---
         cci = indicator.get('cci14', idx_5m)
         if cci < -200:
-            score += 1.5
+            score += 1.96
         elif cci < -100:
-            score += 0.7
+            score += 1.17
         elif cci > 200:
-            score -= 1.5
+            score -= 1.96
         elif cci > 100:
-            score -= 0.7
+            score -= 1.17
 
         # --- Williams %R ---
         wr = indicator.get('wr14', idx_5m)
         if wr < -90:
-            score += 1.2
+            score += 1.72
         elif wr < -80:
-            score += 0.5
+            score += 0.68
         elif wr > -10:
-            score -= 1.2
+            score -= 1.72
         elif wr > -20:
-            score -= 0.5
+            score -= 0.68
 
         # --- Parabolic SAR ---
         sar = indicator.get('sar', idx_5m)
         if price > sar:
-            score += 0.5
+            score += 0.30
         else:
-            score -= 0.5
+            score -= 0.30
 
         # --- Aroon ---
         aroon_up = indicator.get('aroon_up', idx_5m)
         aroon_down = indicator.get('aroon_down', idx_5m)
         if aroon_up > 70 and aroon_down < 30:
-            score += 0.5
+            score += 0.42
         elif aroon_down > 70 and aroon_up < 30:
-            score -= 0.5
+            score -= 0.42
 
         # --- MA trend ---
         ma5 = indicator.get('ma5', idx_5m)
         ma10 = indicator.get('ma10', idx_5m)
         ma20 = indicator.get('ma20', idx_5m)
         if price > ma20 and ma5 > ma10:
-            score += 0.8
+            score += 0.34
         elif price < ma20 and ma5 < ma10:
-            score -= 0.8
+            score -= 0.34
 
         # --- EMA 9/21 ---
         ema9 = indicator.get('ema9', idx_5m)
         ema21 = indicator.get('ema21', idx_5m)
         if ema9 > ema21:
-            score += 0.3
+            score += 0.31
         else:
-            score -= 0.3
+            score -= 0.31
 
         # --- KDJ ---
         kg = indicator.get('kg', idx_5m)
         kd = indicator.get('kd', idx_5m)
         j = indicator.get('kdj_j', idx_5m)
         if kg:
-            score += 0.8; reasons.append('KDJ金叉')
+            score += 0.41; reasons.append('KDJ金叉')
         elif kd:
-            score -= 0.8; reasons.append('KDJ死叉')
+            score -= 0.41; reasons.append('KDJ死叉')
         if j < 0:
-            score += 0.5
+            score += 0.31
         elif j > 100:
-            score -= 0.5
+            score -= 0.31
 
         # --- BB position ---
         bb_up = indicator.get('bb_up', idx_5m)
@@ -216,13 +216,13 @@ class StrategyEngine:
         if bb_up > bb_low:
             bb_pos = (price - bb_low) / (bb_up - bb_low)
             if bb_pos < 0.08:
-                score += 1.2; reasons.append(f'BB底(位置={bb_pos:.2f})')
+                score += 1.91; reasons.append(f'BB底(位置={bb_pos:.2f})')
             elif bb_pos < 0.2:
-                score += 0.5
+                score += 0.74
             elif bb_pos > 0.92:
-                score -= 1.2; reasons.append(f'BB顶(位置={bb_pos:.2f})')
+                score -= 1.91; reasons.append(f'BB顶(位置={bb_pos:.2f})')
             elif bb_pos > 0.8:
-                score -= 0.5
+                score -= 0.74
 
         # --- Volume spike ---
         vol_spike = indicator.get('vol_spike', idx_5m)
@@ -230,36 +230,55 @@ class StrategyEngine:
         closes_val = indicator.get('_closes', idx_5m)
         if vol_spike:
             if closes_val > opens_val:
-                score += 0.5
+                score += 0.31
             else:
-                score -= 0.5
+                score -= 0.31
 
         # --- Candle patterns ---
         if indicator.get_pattern('hammer', idx_5m):
-            score += 1.0; reasons.append('锤子线')
+            score += 1.83; reasons.append('锤子线')
         elif indicator.get_pattern('shooting_star', idx_5m):
-            score -= 1.0; reasons.append('射击之星')
+            score -= 1.83; reasons.append('射击之星')
         if indicator.get_pattern('bullish_engulfing', idx_5m):
-            score += 1.5; reasons.append('多头吞没')
+            score += 1.25; reasons.append('多头吞没')
         elif indicator.get_pattern('bearish_engulfing', idx_5m):
-            score -= 1.5; reasons.append('空头吞没')
+            score -= 1.25; reasons.append('空头吞没')
+
+        # --- RSI Divergence (15-period) ---
+        rsi14_arr = indicator.get('rsi14', idx_5m)
+        if idx_5m >= 15:
+            # Bullish divergence: price near 15-bar low but RSI has diverged up
+            lookback = min(15, idx_5m)
+            price_window = [indicator.get('_closes', idx_5m - j) for j in range(lookback, -1, -1)]
+            rsi_window = [indicator.get('rsi14', idx_5m - j) for j in range(lookback, -1, -1)]
+            price_min_idx = price_window.index(min(price_window))
+            rsi_min_idx = rsi_window.index(min(rsi_window))
+            if price_min_idx > lookback - 5 and rsi_min_idx < price_min_idx - 3:
+                if price <= price_window[price_min_idx] * 1.005:
+                    score += 0.73; reasons.append('RSI底背离')
+            # Bearish divergence
+            price_max_idx = price_window.index(max(price_window))
+            rsi_max_idx = rsi_window.index(max(rsi_window))
+            if price_max_idx > lookback - 5 and rsi_max_idx < price_max_idx - 3:
+                if price >= price_window[price_max_idx] * 0.995:
+                    score -= 0.73; reasons.append('RSI顶背离')
 
         # --- Regime adjustment ---
         if regime == 'trending':
             if di_diff > 5:
-                score += 0.8
+                score += 0.45
             elif di_diff < -5:
-                score -= 0.8
+                score -= 0.45
             if di_diff > 3 and rsi7 < 50:
-                score += 0.3
+                score += 0.56
             elif di_diff < -3 and rsi7 > 50:
-                score -= 0.3
+                score -= 0.56
         elif regime == 'ranging':
             bb_pos_val = (price - bb_low) / (bb_up - bb_low) if bb_up > bb_low else 0.5
             if bb_pos_val < 0.15:
-                score += 0.5
+                score += 0.32
             elif bb_pos_val > 0.85:
-                score -= 0.5
+                score -= 0.32
 
         # ================================================================
         # Decision

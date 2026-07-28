@@ -14,7 +14,7 @@ import os
 import signal as unix_signal
 import sys
 import threading
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 import yaml
 
@@ -63,6 +63,24 @@ class SignalBot:
             '10m': {'settle_bars': 2, 'payout': 0.80},
         })
 
+        # Position sizing
+        pos_cfg = self._strategy_cfg.get('position', {})
+        self._base_stake = pos_cfg.get('base_stake', 25.0)
+        self._position_tiers = sorted(
+            pos_cfg.get('tiers', [{'score_min': 5.0, 'multiplier': 1.0}]),
+            key=lambda t: t['score_min'], reverse=True
+        )
+
+        # Risk management
+        risk_cfg = self._strategy_cfg.get('risk', {})
+        self._max_daily_loss = risk_cfg.get('max_daily_loss', -75.0)
+        self._daily_limit = risk_cfg.get('daily_limit', 50)
+
+        # Trading hours filter
+        hours_cfg = self._strategy_cfg.get('trading_hours', {})
+        self._trading_hours_enabled = hours_cfg.get('enabled', False)
+        self._trading_utc_hours = set(hours_cfg.get('utc_hours', []))
+
         # Proxy config (enable for mainland China, disable for HK/overseas)
         proxy_cfg = config.get('proxy', {})
         proxy_url = ""
@@ -93,11 +111,60 @@ class SignalBot:
         self._loss_streak: dict[str, int] = {sym: 0 for sym in self._symbols}
         self._loss_streak_alerted: dict[str, set] = {sym: set() for sym in self._symbols}
 
+        # Daily risk state (reset on new Beijing day)
+        self._beijing_day = None
+        self._daily_pnl = 0.0
+        self._daily_signal_count = 0
+        self._circuit_breaker = False
+        self._last_signal: dict[str, dict] = {}  # symbol -> last signal for dedup
+
         # Initialize indicator engines per symbol
         for sym in self._symbols:
             self._indicators[sym] = IndicatorEngine()
 
         self._running = False
+
+    # ------------------------------------------------------------------
+    # Risk & position helpers
+    # ------------------------------------------------------------------
+    def _get_stake(self, score: float) -> float:
+        """Calculate position size from score tier. Higher score = larger bet."""
+        abs_score = abs(score)
+        for tier in self._position_tiers:
+            if abs_score >= tier['score_min']:
+                return self._base_stake * tier['multiplier']
+        return self._base_stake
+
+    def _check_daily_reset(self):
+        """Reset daily risk state when Beijing day changes."""
+        today = datetime.fromtimestamp(datetime.now().timestamp(),
+                                       tz=timezone(timedelta(hours=8))).strftime('%Y%m%d')
+        if today != self._beijing_day:
+            if self._beijing_day is not None:
+                logger.info("New trading day %s: resetting PnL=$%.2f signals=%d breaker=%s",
+                           today, self._daily_pnl, self._daily_signal_count, self._circuit_breaker)
+            self._beijing_day = today
+            self._daily_pnl = 0.0
+            self._daily_signal_count = 0
+            self._circuit_breaker = False
+
+    def _check_circuit_breaker(self) -> bool:
+        """Check if trading should be paused. Returns True if blocked."""
+        self._check_daily_reset()
+        if self._circuit_breaker:
+            return True
+        if self._daily_signal_count >= self._daily_limit:
+            logger.warning("Daily limit reached (%d), skipping signals", self._daily_limit)
+            self._circuit_breaker = True
+            return True
+        return False
+
+    def _check_trading_hours(self, close_ts: float) -> bool:
+        """Check if current candle close is within allowed trading hours (UTC)."""
+        if not self._trading_hours_enabled:
+            return True
+        dt_utc = datetime.fromtimestamp(close_ts / 1000, tz=timezone.utc)
+        return dt_utc.hour in self._trading_utc_hours
 
     # ------------------------------------------------------------------
     # Main loop
@@ -136,6 +203,16 @@ class SignalBot:
         close_ts = int(candle[0] + 5 * 60 * 1000)
         dt = datetime.fromtimestamp(close_ts / 1000)
         logger.info("%s 5m candle closed at %s", symbol, dt.strftime('%H:%M:%S'))
+
+        # Trading hours filter
+        if not self._check_trading_hours(close_ts):
+            logger.debug("%s outside trading hours, skipping", symbol)
+            return
+
+        # Circuit breaker check
+        if self._check_circuit_breaker():
+            logger.debug("%s circuit breaker active, skipping", symbol)
+            return
 
         # Get all timeframe data
         candles_5m = self._data.get_candles(symbol, '5m')
@@ -179,6 +256,22 @@ class SignalBot:
             print(f"{'='*60}\n")
             return
 
+        # ETH/BTC same-direction dedup: only keep higher-scored signal
+        direction = signal['direction']
+        dedup_key = f"{direction}_{close_ts}"
+        last = self._last_signal.get(dedup_key)
+        if last is not None and abs(last['score']) >= abs(signal['score']):
+            logger.info("%s %s dedup: score %.1f <= %.1f (%s), dropping",
+                       symbol, direction, abs(signal['score']), abs(last['score']), last['symbol'])
+            return
+        if last is not None:
+            logger.info("%s %s dedup: score %.1f > %.1f (%s), replacing",
+                       symbol, direction, abs(signal['score']), abs(last['score']), last['symbol'])
+        self._last_signal[dedup_key] = {'symbol': symbol, 'score': signal['score'], 'direction': direction}
+
+        # Calculate dynamic stake from score
+        stake = self._get_stake(signal['score'])
+
         # Split into configured timeframes
         for tf_name, tf_cfg in sorted(self._timeframes.items()):
             settle_bars = tf_cfg['settle_bars']
@@ -189,24 +282,37 @@ class SignalBot:
                 'timeframe': tf_name,
                 'settle_bars': settle_bars,
                 'payout': payout,
+                'stake': stake,
             }
 
             # Record and track per timeframe
             self._tracker.record_signal(tf_signal)
             self._tracker.add_pending(symbol, tf_signal, settle_candles=settle_bars, payout=payout)
 
+        self._daily_signal_count += 1
+
         # Notify (combined message for all timeframes)
-        await self._notifier.send_signal(signal, self._timeframes)
-        _show_windows_popup(signal)
+        await self._notifier.send_signal(signal, self._timeframes, stake)
+        _show_windows_popup(signal, stake)
         logger.info(
-            "%s SIGNAL: %s score=%.1f regime=%s price=%.2f rsi=%.0f",
+            "%s SIGNAL: %s score=%.1f stake=$%.0f regime=%s price=%.2f rsi=%.0f",
             symbol, signal['direction'].upper(),
-            signal['score'], signal['regime'],
+            signal['score'], stake, signal['regime'],
             signal['price'], signal['rsi7']
         )
 
     async def _on_settlement(self, symbol: str, result: dict):
-        """Handle a settled trade result: update loss streak, alert if needed."""
+        """Handle a settled trade result: update loss streak, daily P&L, circuit breaker."""
+        self._check_daily_reset()
+        self._daily_pnl += result['pnl']
+
+        # Circuit breaker: pause if daily loss exceeds limit
+        if self._daily_pnl <= self._max_daily_loss and not self._circuit_breaker:
+            self._circuit_breaker = True
+            logger.warning("CIRCUIT BREAKER: daily P&L $%.2f <= $%.0f, pausing for rest of day",
+                          self._daily_pnl, self._max_daily_loss)
+            await self._notifier.send_circuit_breaker(symbol, self._daily_pnl, self._max_daily_loss)
+
         if not self._alerts_cfg.get('loss_streak_enabled', True):
             return
 
@@ -243,7 +349,7 @@ class SignalBot:
 # Entry point
 # ====================================================================
 
-def _show_windows_popup(signal: dict):
+def _show_windows_popup(signal: dict, stake: float = 25.0):
     """Show a Windows MessageBox popup for a trading signal (non-blocking)."""
     if sys.platform != 'win32':
         return
@@ -266,7 +372,7 @@ def _show_windows_popup(signal: dict):
         f"────────────────────────\n"
         f"时间: {time_str}\n"
         f"得分: {score:+.1f}  |  行情: {regime}\n"
-        f"价格: ${price:.2f}\n"
+        f"价格: ${price:.2f}  |  仓位: ${stake:.0f}\n"
         f"RSI7: {signal['rsi7']:.0f}  MFI: {signal['mfi']:.0f}  CCI: {signal['cci']:.0f}\n"
         f"StochK: {signal['stoch_k']:.0f}  ADX: {signal['adx']:.0f}  ATR%: {signal['atr_pct']:.3f}"
     )
