@@ -332,12 +332,10 @@ class StrategyEngine:
             idx_15 = indicator.get_15m_idx(ts_5m)
             if idx_15 >= 0:
                 rsi15 = indicator.get('rsi15m', idx_15)
-                if direction == 'up' and rsi15 < 30:
-                    logger.debug("%s UP blocked by 15m filter: rsi15=%.0f < 30", symbol, rsi15)
-                    return None
-                if direction == 'down' and rsi15 > 70:
-                    logger.debug("%s DOWN blocked by 15m filter: rsi15=%.0f > 70", symbol, rsi15)
-                    return None
+                if direction == 'up' and rsi15 < 35:
+                    return None  # 15m also deeply oversold, trend may continue
+                if direction == 'down' and rsi15 > 65:
+                    return None  # 15m also deeply overbought, trend may continue
 
         # Build signal
         return {
