@@ -73,6 +73,7 @@ class SignalBot:
 
         # Risk management
         risk_cfg = self._strategy_cfg.get('risk', {})
+        self._risk_enabled = risk_cfg.get('circuit_breaker_enabled', True)
         self._max_daily_loss = risk_cfg.get('max_daily_loss', -75.0)
         self._daily_limit = risk_cfg.get('daily_limit', 50)
 
@@ -153,7 +154,7 @@ class SignalBot:
         self._check_daily_reset()
         if self._circuit_breaker:
             return True
-        if self._daily_signal_count >= self._daily_limit:
+        if self._risk_enabled and self._daily_signal_count >= self._daily_limit:
             logger.warning("Daily limit reached (%d), skipping signals", self._daily_limit)
             self._circuit_breaker = True
             return True
@@ -306,8 +307,8 @@ class SignalBot:
         self._check_daily_reset()
         self._daily_pnl += result['pnl']
 
-        # Circuit breaker: pause if daily loss exceeds limit
-        if self._daily_pnl <= self._max_daily_loss and not self._circuit_breaker:
+        # Circuit breaker: pause if daily loss exceeds limit (only if enabled)
+        if self._risk_enabled and self._daily_pnl <= self._max_daily_loss and not self._circuit_breaker:
             self._circuit_breaker = True
             logger.warning("CIRCUIT BREAKER: daily P&L $%.2f <= $%.0f, pausing for rest of day",
                           self._daily_pnl, self._max_daily_loss)
