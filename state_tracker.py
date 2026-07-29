@@ -88,11 +88,10 @@ class StateTracker:
         dt = datetime.fromtimestamp(ts, tz=BEIJING_TZ)
         beijing_day = int(dt.strftime('%Y%m%d'))
 
-        # Daily reset
+        # Daily reset (only reset signals, not settlements — those filter by date on query)
         if beijing_day != self._current_beijing_day:
             self._current_beijing_day = beijing_day
             self._signals_today = []
-            self._settled_today = []
 
         # Store in memory
         self._signals_today.append(signal)
@@ -225,7 +224,10 @@ class StateTracker:
 
     def get_settled_today(self) -> List[dict]:
         """Get settled results for the current Beijing day."""
-        return self._settled_today
+        today = int(datetime.now(BEIJING_TZ).strftime('%Y%m%d'))
+        return [s for s in self._settled_today
+                if int(datetime.fromtimestamp(s['signal_time'] / 1000,
+                                              tz=BEIJING_TZ).strftime('%Y%m%d')) == today]
 
     def get_pending_count(self) -> int:
         """Total unsettled signals across all symbols."""

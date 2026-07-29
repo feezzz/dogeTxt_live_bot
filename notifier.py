@@ -115,33 +115,25 @@ class Notifier:
 
         # Settlement stats
         if settled:
-            settled_7_23 = [
-                s for s in settled
-                if 7 <= datetime.fromtimestamp(s['signal_time'] / 1000,
-                                               tz=BEIJING_TZ).hour < 23
-            ]
-            if settled_7_23:
-                won = sum(1 for s in settled_7_23 if s['result'] == 'WIN')
-                total_s = len(settled_7_23)
-                wr = won / total_s * 100
-                pnl = sum(s['pnl'] for s in settled_7_23)
-                lines.append(f"已结算: {won}胜/{total_s - won}负 | 胜率: {wr:.0f}% | 盈亏: ${pnl:+.2f}")
+            won = sum(1 for s in settled if s['result'] == 'WIN')
+            total_s = len(settled)
+            wr = won / total_s * 100
+            pnl = sum(s['pnl'] for s in settled)
+            lines.append(f"已结算: {won}胜/{total_s - won}负 | 胜率: {wr:.0f}% | 盈亏: ${pnl:+.2f}")
 
-                # Per timeframe
-                for tf in ['10m']:
-                    ss = [s for s in settled_7_23 if s.get('timeframe', '10m') == tf]
-                    if ss:
-                        w = sum(1 for s in ss if s['result'] == 'WIN')
-                        lines.append(f"  {tf}: {w}/{len(ss)} {w/len(ss)*100:.0f}% ${sum(s['pnl'] for s in ss):+.2f}")
+            # Per timeframe
+            for tf in ['10m']:
+                ss = [s for s in settled if s.get('timeframe', '10m') == tf]
+                if ss:
+                    w = sum(1 for s in ss if s['result'] == 'WIN')
+                    lines.append(f"  {tf}: {w}/{len(ss)} {w/len(ss)*100:.0f}% ${sum(s['pnl'] for s in ss):+.2f}")
 
-                # Per symbol
-                for sym in ['ETHUSDT', 'BTCUSDT']:
-                    ss = [s for s in settled_7_23 if s['symbol'] == sym]
-                    if ss:
-                        w = sum(1 for s in ss if s['result'] == 'WIN')
-                        lines.append(f"  {sym}: {w}/{len(ss)} {w/len(ss)*100:.0f}%")
-            else:
-                lines.append("已结算: 0笔 (等待自动结算)")
+            # Per symbol
+            for sym in ['ETHUSDT', 'BTCUSDT']:
+                ss = [s for s in settled if s['symbol'] == sym]
+                if ss:
+                    w = sum(1 for s in ss if s['result'] == 'WIN')
+                    lines.append(f"  {sym}: {w}/{len(ss)} {w/len(ss)*100:.0f}%")
 
         pending = total - (len(settled) if settled else 0)
         if pending > 0:
