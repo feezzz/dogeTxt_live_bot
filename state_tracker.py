@@ -218,16 +218,13 @@ class StateTracker:
     # ------------------------------------------------------------------
     # Query
     # ------------------------------------------------------------------
-    def get_signals_today(self) -> List[dict]:
-        """Get all signals for the current Beijing day."""
+    def get_signals(self) -> List[dict]:
+        """Get all signals from this session."""
         return self._signals_today
 
-    def get_settled_today(self) -> List[dict]:
-        """Get settled results for the current Beijing day."""
-        today = int(datetime.now(BEIJING_TZ).strftime('%Y%m%d'))
-        return [s for s in self._settled_today
-                if int(datetime.fromtimestamp(s['signal_time'] / 1000,
-                                              tz=BEIJING_TZ).strftime('%Y%m%d')) == today]
+    def get_settled(self) -> List[dict]:
+        """Get all settled results from this session."""
+        return self._settled_today
 
     def get_pending_count(self) -> int:
         """Total unsettled signals across all symbols."""

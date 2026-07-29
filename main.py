@@ -335,11 +335,12 @@ class SignalBot:
         logger.info("Shutting down...")
         self._running = False
 
-        # Daily summary with stats
-        signals = self._tracker.get_signals_today()
-        settled = self._tracker.get_settled_today()
+        # Session summary with stats
+        signals = self._tracker.get_signals()
+        settled = self._tracker.get_settled()
+        pending = self._tracker.get_pending_count()
         if signals:
-            await self._notifier.send_daily_summary(signals, settled)
+            await self._notifier.send_session_summary(signals, settled, pending)
 
         await self._data.stop()
         self._tracker.close()

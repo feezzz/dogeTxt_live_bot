@@ -88,18 +88,18 @@ class Notifier:
                 note=f"{dt.strftime('%Y-%m-%d %H:%M')}  |  10m(80%)",
             ))
 
-    async def send_daily_summary(self, signals_today: list, settled: list = None):
-        """Send daily summary at end of Beijing day."""
-        if not signals_today:
+    async def send_session_summary(self, signals: list, settled: list = None, pending: int = 0):
+        """Send session summary when bot stops. Covers all signals from start to shutdown."""
+        if not signals:
             return
 
-        total = len(signals_today)
-        up_count = sum(1 for s in signals_today if s['direction'] == 'up')
+        total = len(signals)
+        up_count = sum(1 for s in signals if s['direction'] == 'up')
         down_count = total - up_count
-        avg_score = sum(abs(s['score']) for s in signals_today) / total if total else 0
+        avg_score = sum(abs(s['score']) for s in signals) / total if total else 0
 
         by_symbol = {}
-        for s in signals_today:
+        for s in signals:
             sym = s['symbol']
             by_symbol.setdefault(sym, 0)
             by_symbol[sym] += 1
@@ -107,7 +107,7 @@ class Notifier:
         sym_parts = [f"{k}:{v}笔" for k, v in by_symbol.items()]
 
         lines = [
-            f"📊 今日信号总结 (7:00-23:00)",
+            f"📊 本次运行信号总结",
             f"总信号: {total}笔 | 做多: {up_count} | 做空: {down_count}",
             f"平均得分: {avg_score:.1f}",
             f"品种分布: {', '.join(sym_parts)}",
@@ -135,22 +135,21 @@ class Notifier:
                     w = sum(1 for s in ss if s['result'] == 'WIN')
                     lines.append(f"  {sym}: {w}/{len(ss)} {w/len(ss)*100:.0f}%")
 
-        pending = total - (len(settled) if settled else 0)
         if pending > 0:
             lines.append(f"⏳ 等待结算: {pending}笔")
 
         content = "\n".join(lines)
 
         if self._summary_enabled and self._token and 'YOUR_PUS' not in self._token:
-            await self._push(content, "每日交易总结")
+            await self._push(content, "本次运行信号总结")
         else:
             print(f"\n{content}\n")
-            logger.info("Daily summary: %s", content.replace('\n', ' | '))
+            logger.info("Session summary: %s", content.replace('\n', ' | '))
 
         # Feishu
         if self._feishu_url:
             await self._push_feishu(self._feishu_card(
-                header=f"📊 今日信号总结",
+                header=f"📊 本次运行信号总结",
                 template="blue",
                 body=content.replace('\n', '\n\n'),
                 note=datetime.now(BEIJING_TZ).strftime('%Y-%m-%d %H:%M'),
