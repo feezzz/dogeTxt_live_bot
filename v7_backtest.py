@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -62,6 +63,50 @@ def load_or_fetch(symbol: str, interval: str, start_ms: int, end_ms: int,
     pd.DataFrame(rows, columns=["open_time", "open", "high", "low", "close", "volume"]
                  ).to_csv(path, index=False)
     return rows
+
+
+def build_aligned_features(df5: pd.DataFrame, df15: pd.DataFrame,
+                           df1h: pd.DataFrame) -> tuple[np.ndarray, list[str], np.ndarray]:
+    """全历史向量化构建特征矩阵，与实盘逐行 build_latest_feature_row 等价。
+
+    返回 (F, col_names, finite)：F 为 n×len(col_names) float 矩阵（无效行为 NaN），
+    col_names 与 models/v7/eth_v7_balanced_config.json 的 features 顺序完全一致，
+    finite 为 n 维 bool 掩码（15m/1h 已对齐完整且全部特征有限）。
+    """
+    cfg = json.loads((V7_DIR / "models/v7/eth_v7_balanced_config.json").read_text())
+    col_names = list(cfg["features"])
+    feats5 = fe._build_base_features(df5)
+    feats15 = fe._add_timeframe_features(df15, "m15")
+    feats1h = fe._add_timeframe_features(df1h, "h1")
+    base_cols = [c for c in col_names if c in feats5.columns]
+    m15_cols = [c for c in col_names if c.startswith("m15_")]
+    h1_cols = [c for c in col_names if c.startswith("h1_")]
+    if len(base_cols) + len(m15_cols) + len(h1_cols) != len(col_names):
+        unknown = [c for c in col_names
+                   if c not in base_cols and c not in m15_cols and c not in h1_cols]
+        raise ValueError(f"config features 包含特征引擎不认识的列: {unknown}")
+
+    # 信号时刻 = 5m K线收盘时刻；15m/1h 取"已完整收盘"的最后一根
+    close_ts = df5["open_time"].to_numpy() + FIVE_MINUTES_MS
+    open15 = df15["open_time"].to_numpy() + fe.FIFTEEN_MINUTES_MS
+    open1h = df1h["open_time"].to_numpy() + fe.ONE_HOUR_MS
+    i15 = np.searchsorted(open15, close_ts, side="right") - 1
+    i1h = np.searchsorted(open1h, close_ts, side="right") - 1
+    n = len(df5)
+    base_np = feats5[base_cols].to_numpy(dtype=float)
+    m15_np = feats15[m15_cols].to_numpy(dtype=float)
+    h1_np = feats1h[h1_cols].to_numpy(dtype=float)
+
+    # 实盘要求 5m>=120、15m>=60、1h>=60（1h 60 根需 60 小时 → 最早有效 5m 索引 720）
+    valid = (np.arange(n) >= 119) & (i15 >= 59) & (i1h >= 59)
+    out = np.full((n, len(col_names)), np.nan)
+    idx = np.arange(n)[valid]
+    pos = {c: j for j, c in enumerate(col_names)}
+    out[np.ix_(idx, [pos[c] for c in base_cols])] = base_np[idx]
+    out[np.ix_(idx, [pos[c] for c in m15_cols])] = m15_np[i15[idx]]
+    out[np.ix_(idx, [pos[c] for c in h1_cols])] = h1_np[i1h[idx]]
+    finite = valid & np.isfinite(out).all(axis=1)
+    return out, col_names, finite
 
 
 def main() -> None:
