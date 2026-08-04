@@ -1,200 +1,82 @@
 # DogeTxt Live Bot
 
-加密货币事件合约实时信号机器人。监控 ETHUSDT/BTCUSDT 5 分钟 K 线，运行 V3 多指标集成策略（Optuna 优化权重），生成 10 分钟事件合约交易信号，通过飞书机器人推送通知。
+加密货币事件合约实时信号机器人。当前主策略为 **V7 因果 ML 信号机器人**（LightGBM 冻结模型，实盘部署中）；仓库根目录保留 V3 多指标集成策略（遗留，不再推荐）。
 
 ## 项目结构
 
 ```
 live_bot/
-├── main.py              # 主入口：信号管线、事件循环、风控
-├── data_stream.py       # Binance WebSocket + REST 数据流
-├── indicator_engine.py  # 指标计算引擎（RSI/MFI/CCI/KDJ/BB 等 20+ 指标）
-├── strategy_engine.py   # V3 集成打分策略（15 个打分组件 + 3 层过滤）
-├── state_tracker.py     # 状态跟踪：CSV 记录 + 事件合约自动结算
-├── notifier.py          # 推送通知：飞书机器人（信号/连亏/启动/总结卡片）
-├── daily_stats.py       # 每日信号统计报告
-├── test_signal.py       # 历史数据回放测试
-├── run.py               # 启动器
-├── config.example.yaml  # 配置文件模板
-├── config.yaml          # 配置文件（含密钥，不提交 git）
-└── requirements.txt     # 依赖
-
-依赖同目录下的 event_backtest/indicators.py（指标计算函数库）。
+├── server_data/ETH_V7_Live_Bot_Complete/  # ★ V7 实盘机器人完整运行包（当前主策略）
+│   ├── v7_run.py / v7_main.py             # 入口与主循环（信号层过滤/熔断/冷却）
+│   ├── v7_strategy_engine.py              # LightGBM 推理 + session_hours 时段过滤
+│   ├── v7_feature_engine.py               # 100 个严格因果特征（EMA/RMA/rolling 向量化）
+│   ├── v7_live_tracker.py                 # 下一根开盘入场、再下一根收盘结算
+│   ├── data_stream.py / notifier.py       # Binance WS 数据流 / 飞书+PushPlus 通知
+│   ├── models/v7/                         # 冻结模型 + 参数（threshold/session_hours 等）
+│   ├── config.yaml                        # 运行配置（通知 token）
+│   ├── self_check.py                      # 离线自检
+│   └── tests/                             # 集成测试（8 例）
+├── v7_backtest.py                         # V7 全量回测管线 + 过滤参数扫描(--scan)
+├── tests/test_v7_backtest.py              # 回测测试（11 例）
+├── server_data/v7_backtest_report.txt     # 全量回测报告（阈值/分半年/分时段）
+├── server_data/v7_filter_scan_report.txt  # 过滤参数扫描报告（时段/min_atrp/cooldown）
+├── server_data/cache/                     # K线缓存（gitignore）
+├── main.py / strategy_engine.py ...       # V3 遗留策略（见文末）
+└── config.yaml                            # V3 配置（含密钥，不提交 git）
 ```
 
-## 快速开始
+## V7 实盘机器人（当前主策略）
 
-### 1. 环境准备
+### 策略口径
+
+- 冻结 LightGBM 模型：100 特征、阈值 **0.555**、ETHUSDT 10 分钟事件合约
+- 5m 收盘出信号 → 下一根 5m 开盘入场 → 再下一根 5m 收盘结算
+- shadow 模式：仅信号通知 + 影子结算，不自动下单
+- 风控：冷却 1 根、min_atrp 0.0005、每日熔断（-75 PnL 或 50 信号，按北京时间锁存）
+
+### 部署（服务器，本地环境系统 Python 亦可）
 
 ```bash
-# 项目需要与 event_backtest/ 在同级目录下
-# 目录结构: dogeTxt/live_bot/ + dogeTxt/event_backtest/
-cd dogeTxt/live_bot
-pip install -r requirements.txt
+cd /feez/ETH_V7_Live_Bot_Complete        # 解压完整部署包
+python3 -m pip install --break-system-packages -r requirements-v7.txt   # 或 ./install.sh 用 venv
+python3 self_check.py                     # 离线自检
+
+# screen 前台启动（不带 --console = 推送通知）
+screen -S v7
+PYTHONUNBUFFERED=1 python3 v7_run.py --config config.yaml
+# Ctrl+A D 脱离；screen -r v7 重新进入
 ```
 
-### 2. 配置
+日志：`logs/v7_bot_YYYYMMDD.log`；信号/结算 CSV：`logs/v7_signals_*.csv`、`logs/v7_settlements_*.csv`。
+完整运维说明见 `server_data/ETH_V7_Live_Bot_Complete/README_SERVER.md`。
+
+### 时段过滤（session_hours，当前关闭）
+
+`models/v7/eth_v7_balanced_config.json` 的 `config.session_hours`：非空数组时只允许这些北京时间小时出信号；`[]` = 不过滤（当前配置）。被过滤信号不占冷却位、不计数、不影响熔断（信号层语义，与回测一致）。扫描曾推荐 `[0,1,2,4,5,8,10,17,20]`（61.1%/日均8.8），但总盈利减半，用户决策不采纳。
+
+## V7 回测结论（2024-01-01 ~ 2026-08-03，272,161 根 5m）
+
+- **基准阈值 0.555：21,111 笔 / 60.0% / +42,375 / 日均 22.3**（盈亏平衡 55.56%，总盈利最优）
+- **方向过滤不采纳**：UP 六个半年期全部 ≥58%，各阈值 UP 均不劣于 DOWN（0.57: UP 65.7% vs DOWN 63.4%）——"UP 系统性失效"是 6 天下跌周行情假象
+- 阈值越高胜率越高但总量收缩：0.57 → 64.3%（5,408 笔）、0.58 → 67.5%（1,218 笔）
+- 分半年 12 格 57.7%~61.8% 无衰减；验证段与实盘 139 笔对齐（137/139、交集 98.6%、0 不一致）
+- **过滤参数扫描**（时段/min_atrp/cooldown）：胜率无显著杠杆（24 小时胜率挤在 58~63% 窄带），atrp/cooldown 只降量不升率；**总盈利优先 → 维持无过滤**
+- 结论：模型有真实稳定且与方向无关的 ~60% 优势；任何过滤都是拿总盈利换单笔感觉
+
+## V7 回测工具
 
 ```bash
-cp config.example.yaml config.yaml
-# 编辑 config.yaml：
-#   - 飞书 webhook URL（推荐）
-#   - 代理设置（大陆开启，海外关闭）
-#
-# 飞书配置：任意群 → 设置 → 群机器人 → 添加自定义机器人 → 复制 Webhook 地址
+python v7_backtest.py --start 2024-01-01 --end 2026-08-03   # 全量回测（数据缓存于 server_data/cache/）
+python v7_backtest.py --validate                             # 与实盘记录对齐验证
+python v7_backtest.py --scan                                 # 过滤参数扫描（约 8-10 分钟）
+python -m pytest tests/test_v7_backtest.py                   # 回测测试
 ```
 
-### 3. 启动
+数据首次需从 Binance 抓取（约 5-10 分钟），之后走缓存。设计文档见 `docs/superpowers/`。
 
-```bash
-python run.py
+## V3 遗留策略（历史）
 
-# 仅控制台模式（不推送通知）
-python run.py --console
-```
-
-### 4. 每日统计
-
-```bash
-python daily_stats.py              # 今日
-python daily_stats.py 20260728     # 指定日期
-```
-
-## 策略概述
-
-**V3 Ensemble 打分策略** — 15 个评分组件，权重由 Optuna TPE 贝叶斯优化：
-
-| 组件 | 权重 | 说明 |
-|------|------|------|
-| RSI(7) 极端 | 2.26 | 超卖 <20 / 超买 >80 |
-| RSI(7) 温和 | 1.59 | 低 <30 / 高 >70 |
-| MFI 极端 | 2.42 | 超卖 <15 / 超买 >85 |
-| StochRSI 极端 | 1.93 | K<10 / K>90 |
-| BB 极端位置 | 1.91 | 近下轨 <8% / 近上轨 >92% |
-| K 线形态-锤子/流星 | 1.83 | 锤子线 / 射击之星 |
-| WR 极端 | 1.72 | <-90 / >-10 |
-| CCI 极端 | 1.96 | <-200 / >200 |
-| K 线形态-吞没 | 1.25 | 多头吞没 / 空头吞没 |
-| CCI 温和 | 1.17 | <-100 / >100 |
-| StochRSI 交叉 | 0.83 | K/D 金叉死叉 |
-| RSI 背离 | 0.73 | 15 周期顶底背离 |
-| StochRSI 温和 | 0.75 | K<20 / K>80 |
-| BB 温和位置 | 0.74 | 位置 <20% / >80% |
-| WR 温和 | 0.68 | <-80 / >-20 |
-| 趋势 ADX+DI | 0.45 | 趋势市 DI 方向加成 |
-| Aroon | 0.42 | 趋势方向 |
-| KDJ 交叉 | 0.41 | KDJ 金叉死叉 |
-| MA 趋势 | 0.34 | MA5/10/20 排列 |
-| EMA 9/21 | 0.31 | 快慢均线方向 |
-| 成交量放量 | 0.31 | 量价配合 |
-| KDJ J 值 | 0.31 | J<0 / J>100 |
-| SAR | 0.30 | 抛物线转向方向 |
-| 震荡市 BB | 0.32 | 震荡市布林带位置 |
-| 趋势 RSI | 0.56 | 趋势市 RSI 配合 |
-
-**信号阈值**: score ≥ 5.0（回测网格搜索最优值）
-
-**3 层过滤**（正式信号）:
-1. 指标一致性 ≥ 2/4（StochRSI、MFI、Aroon、SAR 中至少 2 个确认）
-2. BB 极端位置（做多 near 下轨 ≤10%，做空 near 上轨 ≥90%）
-3. 15m 背离排除（15m 同向极端时跳过，避免追趋势尾部）
-
-## 风控体系
-
-### 动态仓位管理
-
-| 分数 | 仓位 |
-|------|------|
-| ≥ 7.0 | $50（2x 基础） |
-| ≥ 6.0 | $35（1.4x 基础） |
-| ≥ 5.0 | $25（基准） |
-
-### 日内风控
-
-- **熔断**: 日内累计亏损 > $75 自动暂停交易
-- **信号上限**: 日内最多 50 笔信号
-- **交易时段**: UTC 8-20（北京时间 16:00 - 04:00），覆盖币圈黄金交易时段
-
-### 信号去重
-
-- ETH/BTC 同方向信号在同一个 5m K 线触发时，仅保留分数更高者
-- 同一时间戳同方向信号去重
-
-### ATR 波动率过滤
-
-- ETH: ATR% ≥ 0.05%
-- BTC: ATR% ≥ 0.03%（BTC 价格高，ATR% 天然偏低）
-
-## 全量历史回测
-
-基于 2024-01 ~ 2026-07 共 2.5 年，th=5.0, agree≥2, 优化权重：
-
-| 周期 | ETH 胜率 | ETH PnL | BTC 胜率 | BTC PnL |
-|------|---------|---------|---------|---------|
-| 2024 H1 | 69.6% | +$8,160 | 69.4% | +$8,270 |
-| 2024 H2 | 70.2% | +$9,165 | 68.9% | +$8,595 |
-| 2025 H1 | 68.4% | +$7,110 | 67.0% | +$6,990 |
-| 2025 H2 | 69.5% | +$8,230 | 68.3% | +$7,865 |
-| 2026 H1 | 68.8% | +$7,650 | 67.0% | +$6,875 |
-| 2026 Jul (OOS) | 70.9% | +$1,205 | 71.1% | +$1,325 |
-| **合计** | **69.2%** | **+$41,520** | **68.6%** | **+$39,920** |
-
-- 总交易 13,702 笔，胜率 **68.8%**，总盈亏 **+$81,440**，ROI +13.2%
-- 所有周期均显著超过 55.6% 盈亏平衡线
-- OOS（样本外）胜率 71.0%，优于样本内 67.9%，**无过拟合**
-- 各行情/方向表现均衡，无明显偏倚
-
-### 过拟合检验
-
-```
-样本内 (2026H1):  2,623 trades, WR=67.9%
-样本外 (2026 Jul):   365 trades, WR=71.0%
-差值: +3.1%（样本外更优，确认泛化）
-```
-
-## 通知推送
-
-### 飞书机器人（主力）
-
-- **信号通知**: 方向/分数/仓位/理由/行情/时间
-- **连亏提醒**: 连亏 3 笔注意 → 5 笔严重
-- **启动通知**: 数据流连接成功后的策略状态
-- **熔断通知**: 日内亏损超限暂停交易
-- **每日总结**: 当日盈亏/胜率/连亏状态
-
-## 配置参考
-
-```yaml
-# V3 策略参数
-strategy:
-  score_threshold: 5.0          # 信号触发最低分数
-  preview_threshold: 5.0        # 预览阈值（与正式阈值同级，关闭预览）
-  min_atr_pct: 0.05             # 默认最低 ATR%
-  min_atr_pct_map:
-    ETHUSDT: 0.05
-    BTCUSDT: 0.03
-
-  position:
-    base_stake: 25.0
-    tiers:
-      - { score_min: 7.0, multiplier: 2.0 }
-      - { score_min: 6.0, multiplier: 1.4 }
-      - { score_min: 5.0, multiplier: 1.0 }
-
-  risk:
-    max_daily_loss: -75.0
-    daily_limit: 50
-
-  trading_hours:
-    enabled: true
-    utc_hours: [8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20]
-
-alerts:
-  loss_streak_enabled: true
-  loss_streak_thresholds: [3, 5]
-
-feishu_webhook_url: ""
-```
+V3 多指标集成打分策略（15+ 评分组件 + Optuna 权重优化）曾回测 68.8% 胜率，但实盘胜率远低于回测，已被 V7 取代。代码保留于仓库根目录（`main.py` / `strategy_engine.py` / `indicator_engine.py` / `state_tracker.py` / `daily_stats.py`），仅作历史参考，不再维护推荐。
 
 ## 免责声明
 
