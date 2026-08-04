@@ -1,0 +1,16 @@
+[Unit]
+Description=ETH V7 Causal Live Signal Bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/feez/ETH_V7_Live_Bot_Complete
+ExecStart=/feez/ETH_V7_Live_Bot_Complete/.venv/bin/python /feez/ETH_V7_Live_Bot_Complete/v7_run.py --config /feez/ETH_V7_Live_Bot_Complete/config.yaml
+Restart=always
+RestartSec=10
+User=root
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

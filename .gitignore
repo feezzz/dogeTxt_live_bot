@@ -21,3 +21,6 @@ Thumbs.db
 
 # Config with secrets (copy config.example.yaml to config.yaml)
 config.yaml
+
+# K-line cache (regenerable, ~23MB)
+server_data/cache/
