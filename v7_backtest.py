@@ -109,6 +109,86 @@ def build_aligned_features(df5: pd.DataFrame, df15: pd.DataFrame,
     return out, col_names, finite
 
 
+def beijing_day(ts_ms: int) -> str:
+    return datetime.fromtimestamp(ts_ms / 1000, tz=BEIJING_TZ).strftime("%Y%m%d")
+
+
+def simulate(F: np.ndarray, col_names: list[str], finite: np.ndarray,
+             model, threshold: float, df5: pd.DataFrame, cooldown: int = 1,
+             min_atrp: float = 0.0005, max_daily_signals: int = 50,
+             max_daily_loss: float = -75.0, stake: float = 25.0,
+             payout: float = 0.80, start_ms: int | None = None,
+             end_ms: int | None = None) -> list[dict]:
+    atrp_col = col_names.index("atrp")
+    open_ts = df5["open_time"].to_numpy()
+    open_arr = df5["open"].to_numpy()
+    close_arr = df5["close"].to_numpy()
+    n = len(df5)
+    valid_rows = [i for i in range(n) if finite[i]
+                  and (start_ms is None or open_ts[i] + FIVE_MINUTES_MS >= start_ms)
+                  and (end_ms is None or open_ts[i] + FIVE_MINUTES_MS <= end_ms)]
+    prob_of: dict[int, float] = {}
+    if valid_rows:
+        probs = model.predict(F[valid_rows], num_iteration=model.num_trees())
+        prob_of = dict(zip(valid_rows, probs))
+
+    trades: list[dict] = []
+    pending: list[dict] = []
+    last_signal_idx = -10**9
+    daily: dict[str, dict] = {}
+
+    for i in range(n):
+        ts = open_ts[i] + FIVE_MINUTES_MS
+        if start_ms is not None and ts < start_ms:
+            continue
+        if end_ms is not None and ts > end_ms:
+            break
+        day = beijing_day(ts)
+        d = daily.setdefault(day, {"pnl": 0.0, "count": 0, "breaker": False})
+
+        for p in list(pending):  # 先结算（与实盘 process_candle 一致）
+            bars = i - p["signal_idx"]
+            if p["entry"] is None and bars >= 1:
+                p["entry"] = open_arr[i]
+                p["entry_ts"] = open_ts[i]
+            if p["entry"] is not None and bars >= 2:
+                won = close_arr[i] > p["entry"] if p["direction"] == "up" else close_arr[i] < p["entry"]
+                pnl = stake * payout if won else -stake
+                trades.append({
+                    "signal_idx": p["signal_idx"],
+                    "signal_time": datetime.fromtimestamp(p["ts"] / 1000, tz=BEIJING_TZ)
+                        .strftime("%Y-%m-%d %H:%M:%S"),
+                    "beijing_day": beijing_day(p["ts"]),
+                    "direction": p["direction"],
+                    "prob": p["prob"],
+                    "entry": p["entry"],
+                    "exit": close_arr[i],
+                    "result": "WIN" if won else "LOSS",
+                    "pnl": pnl,
+                })
+                d["pnl"] += pnl
+                pending.remove(p)
+
+        if d["breaker"] or d["pnl"] <= max_daily_loss or d["count"] >= max_daily_signals:
+            continue
+        if i not in prob_of or i - last_signal_idx < cooldown:
+            continue
+        prob_up = float(prob_of[i])
+        if prob_up >= threshold:
+            direction = "up"
+        elif prob_up <= 1.0 - threshold:
+            direction = "down"
+        else:
+            continue
+        if F[i, atrp_col] < min_atrp:
+            continue
+        last_signal_idx = i
+        d["count"] += 1
+        pending.append({"signal_idx": i, "ts": ts, "direction": direction,
+                        "prob": prob_up, "entry": None, "entry_ts": None})
+    return trades
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="V7 历史回测数据获取与缓存")
     parser.add_argument("--symbol", default="ETHUSDT")

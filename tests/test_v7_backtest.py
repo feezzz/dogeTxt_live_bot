@@ -58,3 +58,77 @@ def test_alignment_matches_live_row_builder():
                 assert abs(a - b) < 1e-9, f"值不一致 idx={i} col={col}: {a} vs {b}"
     # 早期行（15m/1h 不足）必须标记无效
     assert not finite[119] and not finite[700]
+
+
+def _model_stub(probs):
+    class M:
+        def num_trees(self):
+            return 1
+        def predict(self, rows, num_iteration=None):
+            return np.array([probs.get(i, 0.5) for i in range(len(rows))])
+    return M()
+
+
+def _sim_inputs(falling: bool = False):
+    n = 130
+    t0 = 1704067200000
+    if falling:  # 严格递减价格 → UP 必亏、DOWN 必赢（熔断测试用）
+        closes = 1000 - np.arange(n) * 0.5
+    else:
+        rng = np.random.default_rng(3)
+        closes = 1000 + np.cumsum(rng.normal(0, 0.5, n))
+    rows = []
+    for i in range(n):
+        o = closes[i - 1] if i else 1000.0
+        rows.append([t0 + i * 300000, o, max(o, closes[i]), min(o, closes[i]), closes[i], 10.0])
+    df5 = pd.DataFrame(rows, columns=["open_time", "open", "high", "low", "close", "volume"])
+    F = np.full((n, 3), 0.5)      # [atrp占位, x, y]
+    F[:, 0] = 0.01                 # atrp 足够大
+    return df5, F, ["atrp", "x", "y"], np.ones(n, dtype=bool)
+
+
+def test_settle_timing():
+    df5, F, names, finite = _sim_inputs()
+    model = _model_stub({5: 0.9, 6: 0.1})  # 索引5:up, 索引6:down
+    trades = bt.simulate(F, names, finite, model, 0.555, df5)
+    assert len(trades) == 2
+    t_up = trades[0]
+    assert t_up["signal_idx"] == 5 and t_up["direction"] == "up"
+    assert t_up["entry"] == df5.iloc[6]["open"]       # 下一根开盘
+    assert t_up["exit"] == df5.iloc[7]["close"]       # 再下一根收盘
+    assert t_up["signal_time"].startswith("2024-01-01")
+
+
+def test_tie_is_loss():
+    df5, F, names, finite = _sim_inputs()
+    df5["open"] = 1000.0  # 常数价格 → entry == exit
+    df5["high"] = 1000.0
+    df5["low"] = 1000.0
+    df5["close"] = 1000.0
+    model = _model_stub({5: 0.9})
+    trades = bt.simulate(F, names, finite, model, 0.555, df5)
+    assert len(trades) == 1
+    assert trades[0]["result"] == "LOSS" and trades[0]["pnl"] == -25.0
+
+
+def test_cooldown():
+    df5, F, names, finite = _sim_inputs()
+    model = _model_stub({i: 0.9 for i in range(5, 10)})  # 连续 up
+    trades = bt.simulate(F, names, finite, model, 0.555, df5)
+    idxs = [t["signal_idx"] for t in trades]
+    assert all(b - a >= 1 for a, b in zip(idxs, idxs[1:]))
+
+
+def test_daily_loss_breaker():
+    df5, F, names, finite = _sim_inputs(falling=True)  # 严格递减 → UP 全亏
+    model = _model_stub({i: 0.9 for i in range(5, 60)})  # 全是 up
+    trades = bt.simulate(F, names, finite, model, 0.555, df5,
+                         max_daily_loss=-75.0, stake=25.0, payout=0.8)
+    days = set(t["beijing_day"] for t in trades)
+    assert len(days) == 1  # 130 根 5m 只覆盖一天
+    # 信号 5/6/7/8 连续触发（cooldown=1 允许连发）；第4个信号(索引8)在第3笔结算前
+    # 已触发（当时 pnl=-50 未到熔断线）。第3笔(信号7)在 i=9 结算后 pnl=-75 → 熔断，
+    # i>=9 不再出新信号（与实盘 v7_main.py 顺序一致）。无熔断时 5..59 共 55 个信号。
+    assert len(trades) == 4
+    assert max(t["signal_idx"] for t in trades) == 8  # 熔断后无新信号
+    assert all(t["result"] == "LOSS" for t in trades)
