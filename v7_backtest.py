@@ -169,7 +169,12 @@ def simulate(F: np.ndarray, col_names: list[str], finite: np.ndarray,
                 d["pnl"] += pnl
                 pending.remove(p)
 
-        if d["breaker"] or d["pnl"] <= max_daily_loss or d["count"] >= max_daily_signals:
+        # 熔断锁存：任一限额首次触发后当日永久拦截（与实盘 v7_main.py _risk_blocked
+        # 一致——_circuit_breaker 一旦置 True 仅跨日复位；即使后续在途单 WIN 使
+        # pnl 回升到限额之上，当日也不再恢复出信号）。检查位置不变：结算之后、出信号之前。
+        if d["pnl"] <= max_daily_loss or d["count"] >= max_daily_signals:
+            d["breaker"] = True
+        if d["breaker"]:
             continue
         if i not in prob_of or i - last_signal_idx < cooldown:
             continue

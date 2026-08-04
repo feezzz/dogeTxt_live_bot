@@ -132,3 +132,24 @@ def test_daily_loss_breaker():
     assert len(trades) == 4
     assert max(t["signal_idx"] for t in trades) == 8  # 熔断后无新信号
     assert all(t["result"] == "LOSS" for t in trades)
+
+
+def test_breaker_latches_after_pnl_recovery():
+    # 回归: 熔断触发后即使 pnl 回升（在途单 WIN 结算）也不得恢复出信号，
+    # 与实盘 v7_main.py _risk_blocked 一致——_circuit_breaker 一旦为 True，
+    # 当日剩余时间永久拦截（仅跨日复位）。
+    df5, F, names, finite = _sim_inputs(falling=True)  # 严格递减 → UP 必亏、DOWN 必赢
+    # 信号5 down（必赢+20）、信号10 down（熔断触发时的在途单，必赢+20）、
+    # 其余 6..59 全 up（必亏-25）。
+    model = _model_stub({**{i: 0.9 for i in range(6, 60)}, 5: 0.1, 10: 0.1})
+    trades = bt.simulate(F, names, finite, model, 0.555, df5,
+                         max_daily_loss=-75.0, stake=25.0, payout=0.8)
+    idxs = [t["signal_idx"] for t in trades]
+    # 推演: i=5..10 依次出信号 5(down)/6..9(up)/10(down) 共 6 个；
+    # i=11 结算信号9 → pnl=-80 首次触发熔断（i>=11 不再出新信号）；
+    # i=12 结算信号10（熔断时在途单）→ WIN +20，pnl 回升到 -60 ——
+    # 若熔断不锁存会在这里恢复出信号（signal_idx=12,13...），锁存后必须没有。
+    assert idxs == [5, 6, 7, 8, 9, 10]
+    assert max(idxs) == 10                      # 熔断后（signal_idx > 10）不再有新信号
+    assert trades[-1]["result"] == "WIN"        # 在途单熔断后仍正常结算（WIN）
+    assert sum(t["pnl"] for t in trades) == -60.0  # +20 -25*4 +20
