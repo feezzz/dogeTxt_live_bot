@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Sequence
 
@@ -11,6 +12,11 @@ import lightgbm as lgb
 from v7_feature_engine import FeatureBuildError, build_latest_feature_row
 
 logger = logging.getLogger(__name__)
+BEIJING_TZ = timezone(timedelta(hours=8))
+
+
+def beijing_hour(ts_ms: int) -> int:
+    return datetime.fromtimestamp(ts_ms / 1000, tz=BEIJING_TZ).hour
 
 
 class V7StrategyEngine:
@@ -35,10 +41,23 @@ class V7StrategyEngine:
         self.cooldown = int(self.config.get("cooldown", 1))
         self.max_daily = int(self.config.get("max_daily", 50))
         self.max_daily_loss = float(self.config.get("max_daily_loss", -75.0))
-        self.model = lgb.Booster(model_file=str(model_path))
+        self.session_hours = sorted(int(h) for h in self.config.get("session_hours", []))
+        try:
+            self.model = lgb.Booster(model_file=str(model_path))
+        except lgb.basic.LightGBMError:
+            # Windows 下 LightGBM C API 无法打开含非 ASCII 字符的路径（中文目录），
+            # 回退为从字符串加载（模型为 ASCII 文本）。
+            self.model = lgb.Booster(model_str=model_path.read_text(encoding="utf-8"))
         model_features = list(self.model.feature_name())
         if model_features != self.features:
             raise ValueError("V7 model feature order does not match config")
+
+    def in_session(self, ts_ms: int) -> bool:
+        """信号层时段过滤（北京时间小时）。空集合 = 不过滤。
+
+        被过滤的信号不占冷却位、不计数、不影响熔断——语义与回测 simulate 一致。
+        """
+        return not self.session_hours or beijing_hour(ts_ms) in self.session_hours
 
     def evaluate(
         self,

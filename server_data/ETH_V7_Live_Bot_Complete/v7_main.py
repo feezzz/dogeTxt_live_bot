@@ -164,10 +164,11 @@ class V7SignalBot:
         }
         await self.notifier.send_startup(self.symbols, startup_cfg)
         logger.info(
-            "V7 started: model=%s threshold=%.3f shadow=%s entry=next-5m-open",
+            "V7 started: model=%s threshold=%.3f shadow=%s session_hours=%s entry=next-5m-open",
             self.strategy.version,
             self.strategy.threshold,
             self.shadow_mode,
+            self.strategy.session_hours or "all",
         )
         print("\n[V7 bot is running. Press Ctrl+C to stop.]\n")
         try:
@@ -183,6 +184,9 @@ class V7SignalBot:
         results = self.tracker.process_candle(symbol, candle)
         await self._handle_settlements(results)
         if self._risk_blocked():
+            return
+        if not self.strategy.in_session(close_ts):
+            logger.debug("%s signal skipped: hour outside session_hours %s", symbol, self.strategy.session_hours)
             return
 
         candles_5m = self.data.get_candles(symbol, "5m")

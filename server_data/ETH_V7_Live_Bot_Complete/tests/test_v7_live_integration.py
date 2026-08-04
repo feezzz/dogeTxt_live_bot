@@ -9,7 +9,7 @@ import pandas as pd
 
 from v7_feature_engine import build_latest_feature_row
 from v7_live_tracker import FIVE_MINUTES_MS, V7LiveTracker
-from v7_strategy_engine import V7StrategyEngine
+from v7_strategy_engine import V7StrategyEngine, beijing_hour
 
 
 def make_candles(count: int, interval_ms: int, end_close_ts: int, seed: int) -> list[list[float]]:
@@ -102,6 +102,16 @@ class V7FeatureTests(unittest.TestCase):
                 "reasons",
             ]:
                 self.assertIn(key, signal)
+
+    def test_session_hours_loaded_from_model_config(self):
+        self.assertEqual(self.strategy.session_hours, [0, 1, 2, 4, 5, 8, 10, 17, 20])
+
+    def test_in_session_filters_by_beijing_hour(self):
+        # 2024-01-01 00:00 UTC = 08:00 北京时间; +2h=10:00(时段内), -5h=03:00(时段外)
+        t0 = 1_704_067_200_000
+        self.assertEqual(beijing_hour(t0), 8)
+        self.assertTrue(self.strategy.in_session(t0 + 2 * 3_600_000))
+        self.assertFalse(self.strategy.in_session(t0 - 5 * 3_600_000))
 
 
 class V7TrackerTests(unittest.TestCase):
