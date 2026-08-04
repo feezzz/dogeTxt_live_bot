@@ -179,3 +179,22 @@ def test_prob_of_equivalence():
     prob_of = {5: 0.9, 6: 0.1}                     # 与 stub 输出一致
     b = bt.simulate(F, names, finite, model, 0.555, df5, prob_of=prob_of)
     assert a == b
+
+
+def test_predict_probs_window_and_finite():
+    # 回归: predict_probs 的 start/end_ms 窗口过滤与含 False 的 finite 掩码过滤。
+    # 设计说明: predict_probs 返回的 dict 以"原始行号"为键（= valid_rows 本身），
+    # 键集完全由窗口+finite 决定，与模型预测值无关；而 _model_stub.predict 按
+    # 子集位置取概率（predict 收到 F[valid_rows]，无法反推原始行号），在此断言
+    # 预测值会与原始行号静默错位。因此本测试只断言键集（窗口过滤逻辑本身），
+    # 值的正确性由 test_prob_of_equivalence 用显式 {原始索引: 概率} 字典覆盖。
+    df5, F, names, finite = _sim_inputs()
+    finite = finite.copy()
+    finite[7] = False                              # 含 False 掩码: 中间行不可用
+    start_ms = df5.iloc[5]["open_time"] + bt.FIVE_MINUTES_MS    # 窗口含信号时刻 i=5..10
+    end_ms = df5.iloc[10]["open_time"] + bt.FIVE_MINUTES_MS
+    model = _model_stub({})                        # 预测值路径无关, 只验证键集
+    prob_of = bt.predict_probs(F, finite, model, df5, start_ms, end_ms)
+    # 窗口剔除 0..4 与 11+; finite 剔除 7 → 有效子集恰为 {5, 6, 8, 9, 10}
+    assert set(prob_of) == {5, 6, 8, 9, 10}
+    assert all(isinstance(k, int) and isinstance(v, float) for k, v in prob_of.items())

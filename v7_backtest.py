@@ -392,6 +392,134 @@ def run_full(start: str, end: str, proxy_url: str | None) -> None:
     print(report_by_hour(base_trades))
 
 
+ATRP_GRID = [0.0005, 0.0006, 0.0008, 0.0010, 0.0015]
+COOLDOWN_GRID = [1, 2, 3]
+TARGET_MIN_DAILY, TARGET_MAX_DAILY = 8, 12
+
+
+def scan_filters(F, names, finite, model, threshold, df5) -> str:
+    from collections import defaultdict
+    lines = []
+    prob_of = predict_probs(F, finite, model, df5)
+
+    def run(**kw):
+        return simulate(F, names, finite, model, threshold, df5, prob_of=prob_of, **kw)
+
+    base = run()
+    days = (df5["open_time"].iloc[-1] - df5["open_time"].iloc[0]) / 86400000.0
+
+    lines.append("=== 基准校验 (阈值0.555, 无过滤) ===")
+    lines.append(report_sweep([("全部", base)]))
+    lines.append(f"日均 {len(base) / days:.1f} 笔 (窗口 {days:.0f} 天)")
+
+    lines.append("\n=== min_atrp × cooldown 网格 ===")
+    grid = []
+    for atrp in ATRP_GRID:
+        for cd in COOLDOWN_GRID:
+            sel = run(min_atrp=atrp, cooldown=cd)
+            grid.append((atrp, cd, sel))
+    grid_lines = [f"{'atrp':<8}{'cooldown':<10}{'笔数':<8}{'胜率':<8}{'日均':<7}{'PnL':<9}"]
+    for atrp, cd, sel in grid:
+        if not sel:
+            continue
+        wins = sum(1 for t in sel if t["result"] == "WIN")
+        grid_lines.append(
+            f"{atrp:<8}{cd:<10}{len(sel):<8}{wins / len(sel) * 100:<8.1f}"
+            f"{len(sel) / days:<7.1f}{sum(t['pnl'] for t in sel):<+9.1f}")
+    lines.append("\n".join(grid_lines))
+    # 网格候选: 日均在 [8,12] 内且胜率最高的组合
+    grid_cand = max(
+        ((atrp, cd, sel) for atrp, cd, sel in grid
+         if TARGET_MIN_DAILY <= len(sel) / days <= TARGET_MAX_DAILY),
+        key=lambda x: sum(1 for t in x[2] if t["result"] == "WIN") / len(x[2]),
+        default=None)
+
+    lines.append("\n=== 时段贪心 (北京时间, 按小时胜率降序累加) ===")
+    by_h = defaultdict(list)
+    for t in base:
+        by_h[int(t["signal_time"][11:13])].append(t)
+    hours_sorted = sorted(by_h, key=lambda h: -sum(1 for t in by_h[h] if t["result"] == "WIN") / len(by_h[h]))
+    sess_lines = [f"{'小时集合':<22}{'笔数':<8}{'胜率':<8}{'日均':<7}"]
+    sess_cand = None
+    for k in range(1, len(hours_sorted) + 1):
+        session = set(hours_sorted[:k])
+        sel = run(session_hours=session)
+        wins = sum(1 for t in sel if t["result"] == "WIN")
+        daily = len(sel) / days
+        tag = ""
+        if TARGET_MIN_DAILY <= daily <= TARGET_MAX_DAILY:
+            tag = " ← 目标带"
+            if sess_cand is None:
+                sess_cand = (session, sel)
+        # 注: 小时集合变长后 22 - len 为负会使格式说明符带符号(ValueError), 用 max 兜底
+        sess_lines.append(f"{sorted(session)}{'':<{max(0, 22 - len(str(sorted(session))))}}{len(sel):<8}"
+                          f"{wins / len(sel) * 100:<8.1f}{daily:<7.1f}{tag}")
+    lines.append("\n".join(sess_lines))
+
+    lines.append("\n=== 联合候选分半年×方向验证 ===")
+    cands = []
+    if grid_cand:
+        cands.append(("atrp=%.4f cd=%d" % (grid_cand[0], grid_cand[1]), grid_cand[2]))
+    if sess_cand:
+        cands.append(("时段%s" % sorted(sess_cand[0]), sess_cand[1]))
+    if grid_cand and sess_cand:
+        atrp, cd, _ = grid_cand
+        comb = run(min_atrp=atrp, cooldown=cd, session_hours=sess_cand[0])
+        cands.append(("叠加 atrp=%.4f cd=%d 时段%s" % (atrp, cd, sorted(sess_cand[0])), comb))
+    for name, sel in cands:
+        if not sel:  # 防御: 叠加组合为空时避免除零崩溃
+            lines.append(f"\n--- {name}: 空 (无交易) ---")
+            continue
+        wins = sum(1 for t in sel if t["result"] == "WIN")
+        lines.append(f"\n--- {name}: {len(sel)}笔 {wins / len(sel) * 100:.1f}% "
+                     f"日均{len(sel) / days:.1f} PnL{sum(t['pnl'] for t in sel):+.0f} ---")
+        lines.append(report_by_period(sel))
+
+    lines.append("\n=== 分析结论 ===")
+    lines.append(_filter_conclusion(cands, days))
+    return "\n".join(lines)
+
+
+def _filter_conclusion(cands: list[tuple[str, list[dict]]], days: float) -> str:
+    out = []
+    for name, sel in cands:
+        if not sel:  # 防御: 空组合直接标记, 避免除零
+            out.append(f"{name}: ✗ 未达标 空组合(无交易)")
+            continue
+        wins = sum(1 for t in sel if t["result"] == "WIN")
+        wr = wins / len(sel) * 100
+        daily = len(sel) / days
+        periods = {}
+        for t in sel:
+            y, m = int(t["signal_time"][:4]), int(t["signal_time"][5:7])
+            key = (f"{y}H{1 if m <= 6 else 2}", t["direction"])
+            periods.setdefault(key, []).append(t)
+        stable = all(
+            sum(1 for t in v if t["result"] == "WIN") / len(v) * 100 >= 60.0
+            for v in periods.values())
+        low = [k for k, v in periods.items()
+               if sum(1 for t in v if t["result"] == "WIN") / len(v) * 100 < 55.0]
+        verdict = "✓ 达标" if (TARGET_MIN_DAILY <= daily <= TARGET_MAX_DAILY
+                               and 61.0 <= wr <= 63.0 and stable and not low) else "✗ 未达标"
+        out.append(f"{name}: {verdict} 胜率{wr:.1f}% 日均{daily:.1f} 半年格数{len(periods)} "
+                   f"全部≥60%: {stable} 崩坏格: {low}")
+    out.append("\n推荐: 若存在达标组合, 取胜率最高者; 否则报告最接近目标带的组合及其差距。")
+    return "\n".join(out)
+
+
+def run_scan(proxy_url: str | None) -> None:
+    model = load_model()
+    threshold = load_threshold()
+    s = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    e = datetime(2026, 8, 3, tzinfo=timezone.utc)
+    frames = _load_frames(s, e, proxy_url)
+    F, names, finite = build_aligned_features(*frames)
+    report = scan_filters(F, names, finite, model, threshold, frames[0])
+    out = Path("server_data/v7_filter_scan_report.txt")
+    out.write_text(report, encoding="utf-8")
+    print(report)
+
+
 def main() -> None:
     # Windows 控制台默认 GBK，中文报告会乱码；强制 UTF-8 输出
     if hasattr(sys.stdout, "reconfigure"):
@@ -400,11 +528,14 @@ def main() -> None:
     ap.add_argument("--start", default="2024-01-01")
     ap.add_argument("--end", default="2026-08-03")
     ap.add_argument("--validate", action="store_true", help="只跑 7/29-8/3 并与实盘对比")
+    ap.add_argument("--scan", action="store_true", help="过滤参数扫描(时段/min_atrp/cooldown)")
     ap.add_argument("--proxy", default="http://127.0.0.1:7892", help="代理或空串禁用")
     args = ap.parse_args()
     proxy = args.proxy or None
     if args.validate:
         run_validate(proxy)
+    elif args.scan:
+        run_scan(proxy)
     else:
         run_full(args.start, args.end, proxy)
 
