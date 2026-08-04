@@ -21,6 +21,8 @@ Thumbs.db
 
 # Config with secrets (copy config.example.yaml to config.yaml)
 config.yaml
+# V7 服务器包内的 config.yaml 无密钥，允许入库（回测可复现）
+!server_data/ETH_V7_Live_Bot_Complete/config.yaml
 
 # K-line cache (regenerable, ~23MB)
 server_data/cache/
