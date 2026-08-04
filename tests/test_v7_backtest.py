@@ -153,3 +153,29 @@ def test_breaker_latches_after_pnl_recovery():
     assert max(idxs) == 10                      # 熔断后（signal_idx > 10）不再有新信号
     assert trades[-1]["result"] == "WIN"        # 在途单熔断后仍正常结算（WIN）
     assert sum(t["pnl"] for t in trades) == -60.0  # +20 -25*4 +20
+
+
+def test_session_hours_signal_layer_semantics():
+    # 核心语义：被过滤的信号不占冷却位（错误的后过滤实现会让本测试失败）
+    df5, F, names, finite = _sim_inputs()          # t0=1704067200000 = 2024-01-01 00:00 UTC = 08:00 北京
+    model = _model_stub({10: 0.9, 11: 0.9})        # idx10 close 08:55 北京, idx11 close 09:00 北京
+    trades = bt.simulate(F, names, finite, model, 0.555, df5,
+                         cooldown=2, session_hours={9})
+    assert len(trades) == 1
+    assert trades[0]["signal_idx"] == 11           # idx10 被过滤不更新 last_signal_idx → idx11 不受冷却拦截
+
+
+def test_session_hours_blocks_all():
+    df5, F, names, finite = _sim_inputs()
+    model = _model_stub({5: 0.9, 6: 0.1})
+    trades = bt.simulate(F, names, finite, model, 0.555, df5, session_hours={9})
+    assert trades == []                            # idx5/6 均在 08 点, 不在 {9}
+
+
+def test_prob_of_equivalence():
+    df5, F, names, finite = _sim_inputs()
+    model = _model_stub({5: 0.9, 6: 0.1})
+    a = bt.simulate(F, names, finite, model, 0.555, df5)
+    prob_of = {5: 0.9, 6: 0.1}                     # 与 stub 输出一致
+    b = bt.simulate(F, names, finite, model, 0.555, df5, prob_of=prob_of)
+    assert a == b

@@ -114,24 +114,37 @@ def beijing_day(ts_ms: int) -> str:
     return datetime.fromtimestamp(ts_ms / 1000, tz=BEIJING_TZ).strftime("%Y%m%d")
 
 
-def simulate(F: np.ndarray, col_names: list[str], finite: np.ndarray,
-             model, threshold: float, df5: pd.DataFrame, cooldown: int = 1,
-             min_atrp: float = 0.0005, max_daily_signals: int = 50,
-             max_daily_loss: float = -75.0, stake: float = 25.0,
-             payout: float = 0.80, start_ms: int | None = None,
-             end_ms: int | None = None) -> list[dict]:
+def beijing_hour(ts_ms: int) -> int:
+    return datetime.fromtimestamp(ts_ms / 1000, tz=BEIJING_TZ).hour
+
+
+def predict_probs(F: np.ndarray, finite: np.ndarray, model,
+                  df5: pd.DataFrame, start_ms: int | None = None,
+                  end_ms: int | None = None) -> dict[int, float]:
+    """与 simulate 内部相同的 valid_rows 逻辑，供扫描一次性预测复用。"""
+    open_ts = df5["open_time"].to_numpy()
+    n = len(df5)
+    valid_rows = [i for i in range(n) if finite[i]
+                  and (start_ms is None or open_ts[i] + FIVE_MINUTES_MS >= start_ms)
+                  and (end_ms is None or open_ts[i] + FIVE_MINUTES_MS <= end_ms)]
+    if not valid_rows:
+        return {}
+    probs = model.predict(F[valid_rows], num_iteration=model.num_trees())
+    return dict(zip(valid_rows, probs))
+
+
+def simulate(F, col_names, finite, model, threshold, df5, cooldown=1,
+             min_atrp=0.0005, max_daily_signals=50, max_daily_loss=-75.0,
+             stake=25.0, payout=0.80, start_ms=None, end_ms=None,
+             prob_of: dict[int, float] | None = None,
+             session_hours: set[int] | None = None) -> list[dict]:
     atrp_col = col_names.index("atrp")
     open_ts = df5["open_time"].to_numpy()
     open_arr = df5["open"].to_numpy()
     close_arr = df5["close"].to_numpy()
     n = len(df5)
-    valid_rows = [i for i in range(n) if finite[i]
-                  and (start_ms is None or open_ts[i] + FIVE_MINUTES_MS >= start_ms)
-                  and (end_ms is None or open_ts[i] + FIVE_MINUTES_MS <= end_ms)]
-    prob_of: dict[int, float] = {}
-    if valid_rows:
-        probs = model.predict(F[valid_rows], num_iteration=model.num_trees())
-        prob_of = dict(zip(valid_rows, probs))
+    if prob_of is None:                                    # 改动 1: 预测可复用
+        prob_of = predict_probs(F, finite, model, df5, start_ms, end_ms)
 
     trades: list[dict] = []
     pending: list[dict] = []
@@ -185,6 +198,9 @@ def simulate(F: np.ndarray, col_names: list[str], finite: np.ndarray,
         elif prob_up <= 1.0 - threshold:
             direction = "down"
         else:
+            continue
+        # 改动 2: threshold 判定之后、atrp 检查之前（与 atrp 并列, 必须在 last_signal_idx 更新前）
+        if session_hours is not None and beijing_hour(ts) not in session_hours:
             continue
         if F[i, atrp_col] < min_atrp:
             continue
