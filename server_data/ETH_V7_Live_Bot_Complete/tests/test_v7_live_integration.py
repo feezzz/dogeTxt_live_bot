@@ -104,14 +104,18 @@ class V7FeatureTests(unittest.TestCase):
                 self.assertIn(key, signal)
 
     def test_session_hours_loaded_from_model_config(self):
-        self.assertEqual(self.strategy.session_hours, [0, 1, 2, 4, 5, 8, 10, 17, 20])
+        # 2026-08-04 决策: 总盈利优先, 时段过滤回退为无过滤(空数组)
+        self.assertEqual(self.strategy.session_hours, [])
 
     def test_in_session_filters_by_beijing_hour(self):
-        # 2024-01-01 00:00 UTC = 08:00 北京时间; +2h=10:00(时段内), -5h=03:00(时段外)
+        # 语义测试: 手动注入时段集合; 2024-01-01 00:00 UTC = 08:00 北京时间
         t0 = 1_704_067_200_000
         self.assertEqual(beijing_hour(t0), 8)
-        self.assertTrue(self.strategy.in_session(t0 + 2 * 3_600_000))
-        self.assertFalse(self.strategy.in_session(t0 - 5 * 3_600_000))
+        self.strategy.session_hours = [0, 1, 2, 4, 5, 8, 10, 17, 20]
+        self.assertTrue(self.strategy.in_session(t0 + 2 * 3_600_000))  # 10:00 北京
+        self.assertFalse(self.strategy.in_session(t0 - 5 * 3_600_000))  # 03:00 北京
+        self.strategy.session_hours = []
+        self.assertTrue(self.strategy.in_session(t0))  # 空集合 = 不过滤
 
 
 class V7TrackerTests(unittest.TestCase):
