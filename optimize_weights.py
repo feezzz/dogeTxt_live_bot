@@ -131,7 +131,7 @@ def score_signal(i, candles, ind, weights, rsi15m_vals=None):
     if atr_pct_val < 0.05:
         return 0, None, None
 
-    idx_1h = _tf_idx(t1h, t5[i])
+    idx_1h = _tf_idx(t1h, t5[i] - 55 * 60 * 1000)
     if idx_1h < 20:
         return 0, None, None
 
@@ -278,7 +278,7 @@ def score_signal(i, candles, ind, weights, rsi15m_vals=None):
             return 0, None, None
 
     # 15m divergence filter
-    idx_15 = _tf_idx(ind['_t15'], t5[i])
+    idx_15 = _tf_idx(ind['_t15'], t5[i] - 10 * 60 * 1000)
     if idx_15 >= 0 and rsi15m_vals is not None and idx_15 < len(rsi15m_vals):
         r15 = rsi15m_vals[idx_15]
         if direction == 'up' and r15 < RSI15_UP_MAX:

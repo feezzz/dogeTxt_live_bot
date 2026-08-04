@@ -140,7 +140,7 @@ def score_bucket_analysis(symbol: str = 'ETHUSDT', start: str = '2026-01-01',
         if atr_pct_5m[i] < 0.06:
             continue
 
-        idx_1h = tf_idx(t1h, t5[i])
+        idx_1h = tf_idx(t1h, t5[i] - 55 * 60 * 1000)
         if idx_1h < 20:
             continue
 

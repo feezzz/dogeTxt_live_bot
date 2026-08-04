@@ -56,7 +56,7 @@ def tf_idx(timestamps, target_ts):
 def score_candle(i):
     """Full V3 scoring for candle i."""
     if atr_pct_5m[i] < 0.06: return None
-    idx_1h = tf_idx(t1h, t5[i])
+    idx_1h = tf_idx(t1h, t5[i] - 55 * 60 * 1000)
     if idx_1h < 20: return None
 
     adx_v = adx_1h[idx_1h]; pdi = pdi_1h[idx_1h]; mdi = mdi_1h[idx_1h]

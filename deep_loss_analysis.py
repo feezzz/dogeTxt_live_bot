@@ -75,8 +75,8 @@ def tf_idx(ts_list, target_ts):
 def v3_score_and_attrs(i):
     """Return (abs_score, direction, regime, attrs_dict) or None."""
     if atr_pct_vals[i] < 0.06: return None
-    idx_1h = tf_idx(t1h, t5[i])
-    idx_15 = tf_idx(t15, t5[i])
+    idx_1h = tf_idx(t1h, t5[i] - 55 * 60 * 1000)
+    idx_15 = tf_idx(t15, t5[i] - 10 * 60 * 1000)
     if idx_1h < 20 or idx_15 < 10: return None
 
     adx_v = adx_1h[idx_1h]; pdi = pdi_1h[idx_1h]; mdi = mdi_1h[idx_1h]

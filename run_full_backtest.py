@@ -134,7 +134,7 @@ def _run_tf_backtest(symbol, start, end, label, settle_bars, payout):
         if equity <= 25: break
         if atr_pct_5m[i] < 0.08: continue
 
-        idx_1h = tf_idx(t1h, t5[i])
+        idx_1h = tf_idx(t1h, t5[i] - 55 * 60 * 1000)
         if idx_1h < 20: continue
         if dt.hour in LOW_VOL_HOURS and daily_bets >= 50 // 3: continue
 
