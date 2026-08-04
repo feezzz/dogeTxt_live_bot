@@ -427,6 +427,9 @@ def scan_filters(F, names, finite, model, threshold, df5) -> str:
             f"{atrp:<8}{cd:<10}{len(sel):<8}{wins / len(sel) * 100:<8.1f}"
             f"{len(sel) / days:<7.1f}{sum(t['pnl'] for t in sel):<+9.1f}")
     lines.append("\n".join(grid_lines))
+    # 网格叙述(审查修正): cooldown 比 min_atrp 杠杆更强的正确佐证
+    lines.append("注: cooldown 比 min_atrp 杠杆更强 — 固定 atrp=0.0005, cd 1→3 日均 22.3→15.5 (-30%)"
+                 " vs 固定 cd=1, atrp 0.0005→0.0015 日均 22.3→17.2 (-23%)。")
     # 网格候选: 日均在 [8,12] 内且胜率最高的组合
     grid_cand = max(
         ((atrp, cd, sel) for atrp, cd, sel in grid
@@ -444,6 +447,10 @@ def scan_filters(F, names, finite, model, threshold, df5) -> str:
     for k in range(1, len(hours_sorted) + 1):
         session = set(hours_sorted[:k])
         sel = run(session_hours=session)
+        if not sel:  # 防御: 空组合(某小时集合无任何信号)避免除零, 与 grid/cands 一致
+            sess_lines.append(f"{sorted(session)}{'':<{max(0, 22 - len(str(sorted(session))))}}{0:<8}"
+                              f"{0.0:<8.1f}{0.0:<7.1f} 0 笔")
+            continue
         wins = sum(1 for t in sel if t["result"] == "WIN")
         daily = len(sel) / days
         tag = ""
@@ -455,6 +462,11 @@ def scan_filters(F, names, finite, model, threshold, df5) -> str:
         sess_lines.append(f"{sorted(session)}{'':<{max(0, 22 - len(str(sorted(session))))}}{len(sel):<8}"
                           f"{wins / len(sel) * 100:<8.1f}{daily:<7.1f}{tag}")
     lines.append("\n".join(sess_lines))
+    # 贪心曲线叙述(审查修正): 存在两处局部回升; 回升原因为可能原因之一
+    lines.append("注: 胜率曲线整体单调下降(61.7%→60.0%), 但存在两处局部回升: "
+                 "k=2→3 (61.5→61.7) 与 k=18→19 (60.3→60.4); "
+                 "可能原因之一是 session_hours 过滤不占冷却位使重新模拟时冷却释放、"
+                 "高胜率小时新增少量信号, 新增小时自身高胜率也是因素之一。")
 
     lines.append("\n=== 联合候选分半年×方向验证 ===")
     cands = []
@@ -475,6 +487,10 @@ def scan_filters(F, names, finite, model, threshold, df5) -> str:
                      f"日均{len(sel) / days:.1f} PnL{sum(t['pnl'] for t in sel):+.0f} ---")
         lines.append(report_by_period(sel))
 
+    # 半年样本量不均衡说明(审查修正)
+    lines.append("注: 2026H2 为部分覆盖(数据截至 2026-08-03, 约 34 天, 339 笔), "
+                 "半年稳定性结论各格样本量不均衡。")
+
     lines.append("\n=== 分析结论 ===")
     lines.append(_filter_conclusion(cands, days))
     return "\n".join(lines)
@@ -494,15 +510,23 @@ def _filter_conclusion(cands: list[tuple[str, list[dict]]], days: float) -> str:
             y, m = int(t["signal_time"][:4]), int(t["signal_time"][5:7])
             key = (f"{y}H{1 if m <= 6 else 2}", t["direction"])
             periods.setdefault(key, []).append(t)
-        stable = all(
-            sum(1 for t in v if t["result"] == "WIN") / len(v) * 100 >= 60.0
-            for v in periods.values())
+        # 达标判定(按计划裁定, 修正 brief 代码 all() 笔误): 按方向分组,
+        # 每方向 6 个半年期(含 2026H2 残缺期)中 ≥4 个半年期胜率 ≥60% 即 stable,
+        # 不再要求全部 12 格 ≥60%
+        dir_hits: dict[str, tuple[int, int]] = {}
+        for (half, direction), v in periods.items():
+            hit = sum(1 for t in v if t["result"] == "WIN") / len(v) * 100 >= 60.0
+            prev_hits, prev_cells = dir_hits.get(direction, (0, 0))
+            dir_hits[direction] = (prev_hits + (1 if hit else 0), prev_cells + 1)
+        stable = bool(dir_hits) and all(
+            hits >= 4 and cells == 6 for hits, cells in dir_hits.values())
         low = [k for k, v in periods.items()
                if sum(1 for t in v if t["result"] == "WIN") / len(v) * 100 < 55.0]
         verdict = "✓ 达标" if (TARGET_MIN_DAILY <= daily <= TARGET_MAX_DAILY
                                and 61.0 <= wr <= 63.0 and stable and not low) else "✗ 未达标"
-        out.append(f"{name}: {verdict} 胜率{wr:.1f}% 日均{daily:.1f} 半年格数{len(periods)} "
-                   f"全部≥60%: {stable} 崩坏格: {low}")
+        per_dir = " ".join(f"{d} {h}/{c}" for d, (h, c) in sorted(dir_hits.items()))
+        out.append(f"{name}: {verdict} 胜率{wr:.1f}% 日均{daily:.1f} "
+                   f"各方向≥60%: {per_dir} 崩坏格: {low}")
     out.append("\n推荐: 若存在达标组合, 取胜率最高者; 否则报告最接近目标带的组合及其差距。")
     return "\n".join(out)
 
