@@ -8,6 +8,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import lightgbm as lgb
 import numpy as np
 import pandas as pd
 import requests
@@ -194,30 +195,112 @@ def simulate(F: np.ndarray, col_names: list[str], finite: np.ndarray,
     return trades
 
 
+def load_model() -> lgb.Booster:
+    cfg = json.loads((V7_DIR / "models/v7/eth_v7_balanced_config.json").read_text(encoding="utf-8"))
+    model_file = V7_DIR / "models/v7/eth_v7_balanced_model.txt"
+    try:
+        model = lgb.Booster(model_file=str(model_file))
+    except lgb.basic.LightGBMError:
+        # Windows 下 LightGBM C API 无法打开含非 ASCII 字符的路径（中文目录），
+        # 回退为从字符串加载（模型为 ASCII 文本，166KB）。
+        model = lgb.Booster(model_str=model_file.read_text(encoding="utf-8"))
+    assert list(model.feature_name()) == cfg["features"], "模型特征顺序与配置不一致"
+    return model
+
+
+def compare_live(backtest_trades: list[dict], live_rows: list[dict]) -> str:
+    """live_rows: 从实盘结算 CSV 解析的 dict 列表（signal_time 北京时间字符串）。"""
+    bt_by_day = {}
+    for t in backtest_trades:
+        bt_by_day.setdefault(t["signal_time"], t)
+    live_by_day = {r["signal_time"]: r for r in live_rows}
+    shared = set(bt_by_day) & set(live_by_day)
+    only_bt = set(bt_by_day) - set(live_by_day)
+    only_live = set(live_by_day) - set(bt_by_day)
+
+    def wr(ts, rows):
+        wins = sum(1 for r in rows if r["result"] == "WIN")
+        return f"{wins}/{len(rows)} ({wins / len(rows) * 100:.1f}%)" if rows else "-"
+
+    bt_l = list(bt_by_day.values())
+    live_l = list(live_by_day.values())
+    mismatch = []
+    for ts in sorted(shared):
+        a, b = bt_by_day[ts], live_by_day[ts]
+        if a["direction"] != b["direction"] or a["result"] != b["result"]:
+            mismatch.append((ts, a["direction"], a["result"], b["direction"], b["result"]))
+    return (
+        f"回测: {len(bt_l)}笔 胜率{wr(ts, bt_l)}  实盘: {len(live_l)}笔 胜率{wr(ts, live_l)}\n"
+        f"交集: {len(shared)}  仅回测: {sorted(only_bt)[:5]}{'...' if len(only_bt) > 5 else ''}  "
+        f"仅实盘: {sorted(only_live)[:5]}{'...' if len(only_live) > 5 else ''}\n"
+        f"方向/结果不一致: {len(mismatch)} 笔 {mismatch[:5]}"
+    )
+
+
+def _bj_to_ms(s: str) -> int:
+    """北京时间字符串 '%Y-%m-%d %H:%M:%S' → UTC epoch ms。"""
+    return int(datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
+               .replace(tzinfo=BEIJING_TZ).timestamp() * 1000)
+
+
+def _read_live_settlements() -> list[dict]:
+    rows = []
+    for path in sorted((ROOT / "server_data" / "logs").glob("v7_settlements_*.csv")):
+        rows += pd.read_csv(path).to_dict("records")
+    return rows
+
+
+def _load_frames(start: datetime, end: datetime, proxy_url: str | None):
+    start_ms, end_ms = int(start.timestamp() * 1000), int(end.timestamp() * 1000)
+    cols = ["open_time", "open", "high", "low", "close", "volume"]
+    return tuple(
+        pd.DataFrame(load_or_fetch("ETHUSDT", iv, start_ms, end_ms, proxy_url), columns=cols)
+        for iv in ["5m", "15m", "1h"]
+    )
+
+
+def run_validate(proxy_url: str | None) -> None:
+    model = load_model()
+    live_rows = _read_live_settlements()
+    if not live_rows:
+        raise SystemExit("未找到实盘结算 CSV: server_data/logs/v7_settlements_*.csv")
+    # 验证窗口从实盘 CSV 推导，不硬编码：服务器首次启动 2026-07-29 18:10 北京时间
+    # （=10:10 UTC），首笔信号 19:00 北京时间（=11:00 UTC），末笔结算 08-03 15:30 北京时间。
+    min_signal_ms = min(_bj_to_ms(r["signal_time"]) for r in live_rows)
+    max_settle_ms = max(_bj_to_ms(r["settle_time"]) for r in live_rows)
+    # 提前 60h 保证 1h 特征 warmup（有效行要求 1h 索引 >=59）；末尾留 12h 余量
+    start_ms = min_signal_ms - 60 * 60 * 60 * 1000
+    end_ms = max_settle_ms + 12 * 60 * 60 * 1000
+    frames = _load_frames(
+        datetime.fromtimestamp(start_ms / 1000, tz=timezone.utc),
+        datetime.fromtimestamp(end_ms / 1000, tz=timezone.utc),
+        proxy_url,
+    )
+    F, names, finite = build_aligned_features(*frames)
+    # stake=10.0：config.yaml 写 25.0 但服务器从未热加载，实盘 CSV pnl WIN+8.0/LOSS-10.0
+    # （payout 0.80）才是事实来源。start/end 限定只生成实盘窗口内信号。
+    trades = simulate(F, names, finite, model, 0.555, frames[0],
+                      stake=10.0, start_ms=min_signal_ms,
+                      end_ms=max_settle_ms + 10 * 60 * 1000)
+    print(compare_live(trades, live_rows))
+
+
+def run_full(start: str, end: str, proxy_url: str | None) -> None:
+    raise NotImplementedError("Task 5: 全量回测待实现")
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="V7 历史回测数据获取与缓存")
-    parser.add_argument("--symbol", default="ETHUSDT")
-    parser.add_argument("--interval", default="5m")
-    parser.add_argument("--start", help="起始时间, 如 2024-01-01 或 unix ms")
-    parser.add_argument("--end", help="结束时间, 如 2026-08-01 或 unix ms")
-    parser.add_argument("--no-proxy", action="store_true", help="禁用代理直连 Binance")
-    args = parser.parse_args()
-
-    def to_ms(s: str | None, default_dt: datetime) -> int:
-        if not s:
-            return int(default_dt.timestamp() * 1000)
-        if s.isdigit():
-            return int(s)
-        return int(datetime.strptime(s, "%Y-%m-%d").replace(tzinfo=BEIJING_TZ).timestamp() * 1000)
-
-    start_ms = to_ms(args.start, datetime(2024, 1, 1, tzinfo=BEIJING_TZ))
-    end_ms = to_ms(args.end, datetime(2026, 8, 1, tzinfo=BEIJING_TZ))
-    proxy_url = None if args.no_proxy else "http://127.0.0.1:7892"
-    rows = load_or_fetch(args.symbol, args.interval, start_ms, end_ms, proxy_url)
-    print(f"candles: {len(rows)}")
-    if rows:
-        print("first:", rows[0])
-        print("last:", rows[-1])
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--start", default="2024-01-01")
+    ap.add_argument("--end", default="2026-08-03")
+    ap.add_argument("--validate", action="store_true", help="只跑 7/29-8/3 并与实盘对比")
+    ap.add_argument("--proxy", default="http://127.0.0.1:7892", help="代理或空串禁用")
+    args = ap.parse_args()
+    proxy = args.proxy or None
+    if args.validate:
+        run_validate(proxy)
+    else:
+        run_full(args.start, args.end, proxy)
 
 
 if __name__ == "__main__":
