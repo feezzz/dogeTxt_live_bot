@@ -208,6 +208,12 @@ def load_model() -> lgb.Booster:
     return model
 
 
+def load_threshold() -> float:
+    """读取模型配置中的交易阈值 cfg["config"]["prob_threshold"]（当前 0.555）。"""
+    cfg = json.loads((V7_DIR / "models/v7/eth_v7_balanced_config.json").read_text(encoding="utf-8"))
+    return float(cfg["config"]["prob_threshold"])
+
+
 def compare_live(backtest_trades: list[dict], live_rows: list[dict]) -> str:
     """live_rows: 从实盘结算 CSV 解析的 dict 列表（signal_time 北京时间字符串）。"""
     bt_by_day = {}
@@ -218,7 +224,7 @@ def compare_live(backtest_trades: list[dict], live_rows: list[dict]) -> str:
     only_bt = set(bt_by_day) - set(live_by_day)
     only_live = set(live_by_day) - set(bt_by_day)
 
-    def wr(ts, rows):
+    def wr(rows):
         wins = sum(1 for r in rows if r["result"] == "WIN")
         return f"{wins}/{len(rows)} ({wins / len(rows) * 100:.1f}%)" if rows else "-"
 
@@ -230,7 +236,7 @@ def compare_live(backtest_trades: list[dict], live_rows: list[dict]) -> str:
         if a["direction"] != b["direction"] or a["result"] != b["result"]:
             mismatch.append((ts, a["direction"], a["result"], b["direction"], b["result"]))
     return (
-        f"回测: {len(bt_l)}笔 胜率{wr(ts, bt_l)}  实盘: {len(live_l)}笔 胜率{wr(ts, live_l)}\n"
+        f"回测: {len(bt_l)}笔 胜率{wr(bt_l)}  实盘: {len(live_l)}笔 胜率{wr(live_l)}\n"
         f"交集: {len(shared)}  仅回测: {sorted(only_bt)[:5]}{'...' if len(only_bt) > 5 else ''}  "
         f"仅实盘: {sorted(only_live)[:5]}{'...' if len(only_live) > 5 else ''}\n"
         f"方向/结果不一致: {len(mismatch)} 笔 {mismatch[:5]}"
@@ -279,17 +285,101 @@ def run_validate(proxy_url: str | None) -> None:
     F, names, finite = build_aligned_features(*frames)
     # stake=10.0：config.yaml 写 25.0 但服务器从未热加载，实盘 CSV pnl WIN+8.0/LOSS-10.0
     # （payout 0.80）才是事实来源。start/end 限定只生成实盘窗口内信号。
-    trades = simulate(F, names, finite, model, 0.555, frames[0],
+    threshold = load_threshold()
+    trades = simulate(F, names, finite, model, threshold, frames[0],
                       stake=10.0, start_ms=min_signal_ms,
                       end_ms=max_settle_ms + 10 * 60 * 1000)
     print(compare_live(trades, live_rows))
 
 
+def report_sweep(combos: list[tuple[str, list[dict]]]) -> str:
+    lines = [f"{'方案':<28}{'笔数':<7}{'胜率':<8}{'PnL':<9}"]
+    for name, sel in combos:
+        if not sel:
+            continue
+        wins = sum(1 for t in sel if t["result"] == "WIN")
+        pnl = sum(t["pnl"] for t in sel)
+        lines.append(f"{name:<28}{len(sel):<7}{wins / len(sel) * 100:<8.1f}{pnl:<+9.1f}")
+    return "\n".join(lines)
+
+
+def report_by_period(trades: list[dict]) -> str:
+    rows = []
+    for t in trades:
+        half = t["signal_time"][:7]
+        y, m = int(half[:4]), int(half[5:7])
+        rows.append((t, f"{y}H{1 if m <= 6 else 2}"))
+    out = [f"{'半年':<8}{'方向':<6}{'笔数':<6}{'胜率':<8}"]
+    for half in sorted({h for _, h in rows}):
+        for d in ["up", "down"]:
+            sel = [t for t, h in rows if h == half and t["direction"] == d]
+            if not sel:
+                continue
+            wins = sum(1 for t in sel if t["result"] == "WIN")
+            out.append(f"{half:<8}{d:<6}{len(sel):<6}{wins / len(sel) * 100:<8.1f}")
+    return "\n".join(out)
+
+
+def report_by_hour(trades: list[dict]) -> str:
+    from collections import defaultdict
+    by_h = defaultdict(list)
+    for t in trades:
+        by_h[int(t["signal_time"][11:13])].append(t)
+    lines = [f"{'小时(北京)':<10}{'笔数':<6}{'胜率':<8}"]
+    for h in sorted(by_h):
+        sel = by_h[h]
+        wins = sum(1 for t in sel if t["result"] == "WIN")
+        lines.append(f"{h:02d}时{'':<6}{len(sel):<6}{wins / len(sel) * 100:<8.1f}")
+    return "\n".join(lines)
+
+
 def run_full(start: str, end: str, proxy_url: str | None) -> None:
-    raise NotImplementedError("Task 5: 全量回测待实现")
+    model = load_model()
+    threshold = load_threshold()
+    s = datetime.fromisoformat(start).replace(tzinfo=timezone.utc)
+    e = datetime.fromisoformat(end).replace(tzinfo=timezone.utc)
+    frames = _load_frames(s, e, proxy_url)
+    df5 = frames[0]
+    print(f"数据: {len(df5)} 根5mK线 {start} ~ {end}")
+    F, names, finite = build_aligned_features(*frames)
+    print(f"有效特征行: {finite.sum()} / {len(df5)}")
+
+    base_trades = simulate(F, names, finite, model, threshold, df5)
+    print(f"\n=== 基准 (阈值{threshold}, 与实盘相同) ===")
+    print(report_sweep([("全部", base_trades)]))
+
+    print(f"\n=== 阈值 × 方向扫描 ===")
+    scan = [(f"UP≥{t} DOWN≥{t}", simulate(F, names, finite, model, t, df5))
+            for t in [0.555, 0.56, 0.57, 0.58, 0.59, 0.60]]
+    print(report_sweep(scan))
+
+    print(f"\n=== 分方向 ===")
+    ups = [t for t in base_trades if t["direction"] == "up"]
+    downs = [t for t in base_trades if t["direction"] == "down"]
+    print(report_sweep([("UP", ups), ("DOWN", downs)]))
+
+    print(f"\n=== 组合方案 ===")
+    # down 交易的 prob 字段是 probability_up（down 要求 prob_up <= 1-threshold），
+    # 直接按 prob>=0.57 过滤恒为空集；"DOWN 置信≥0.57" 等价于 prob_up <= 1-0.57
+    down_hi = [t for t in downs if t["prob"] <= 1.0 - 0.57]
+    up_hi = [t for t in ups if t["prob"] >= 0.58]
+    print(report_sweep([
+        ("只DOWN", downs),
+        ("只DOWN 置信≥0.57", down_hi),
+        ("UP≥0.58 + DOWN", up_hi + downs),
+    ]))
+
+    print(f"\n=== 分半年稳定性 ===")
+    print(report_by_period(base_trades))
+
+    print(f"\n=== 分时段(北京时间) ===")
+    print(report_by_hour(base_trades))
 
 
 def main() -> None:
+    # Windows 控制台默认 GBK，中文报告会乱码；强制 UTF-8 输出
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser()
     ap.add_argument("--start", default="2024-01-01")
     ap.add_argument("--end", default="2026-08-03")
